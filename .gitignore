@@ -1,0 +1,23 @@
+# Arquivos gerados
+gravacoes/
+transcricoes/
+atas/
+
+# Credenciais
+.env
+*.key
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+venv/
+.venv/
+
+# IDE
+.vscode/
+.idea/
+
+# SO
+Thumbs.db
+.DS_Store
