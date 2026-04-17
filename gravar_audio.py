@@ -21,12 +21,52 @@ from datetime import datetime
 # CONFIGURACOES
 # ──────────────────────────────────────────────
 
-TAXA_AMOSTRAGEM = 44100   # Hz — qualidade boa para voz
-CANAIS          = 1       # 1 = mono (ideal para voz e Whisper)
-DISPOSITIVO     = None    # None = microfone padrao do Windows
-PASTA_SAIDA     = "gravacoes"
+CANAIS      = 1       # 1 = mono (ideal para voz e Whisper)
+PASTA_SAIDA = "gravacoes"
 
 # ──────────────────────────────────────────────
+
+
+def encontrar_microfone() -> tuple[int | None, int]:
+    """
+    Encontra automaticamente o microfone real do computador,
+    ignorando dispositivos virtuais (VB-Cable, etc).
+    Retorna (indice_do_dispositivo, taxa_de_amostragem_nativa).
+    """
+    ignorar  = ["cable", "vb-audio", "virtual", "mixagem", "stereo mix",
+                "alto-falante", "speaker", "output"]
+    preferir = ["intel", "tecnologia", "realtek", "mic input"]
+
+    dispositivos = sd.query_devices()
+    candidatos = []
+
+    for i, d in enumerate(dispositivos):
+        if d["max_input_channels"] == 0:
+            continue
+
+        nome = d["name"].lower()
+
+        if any(p in nome for p in ignorar):
+            continue
+
+        prioridade = 0
+        if "grupo de microfones" in nome and any(p in nome for p in preferir):
+            prioridade += 20
+        elif any(p in nome for p in preferir):
+            prioridade += 5
+
+        candidatos.append((prioridade, i, d["name"], int(d["default_samplerate"])))
+
+    if not candidatos:
+        return None, 44100
+
+    candidatos.sort(reverse=True)
+    escolhido = candidatos[0]
+    print(f"  Microfone detectado: [{escolhido[1]}] {escolhido[2]} ({escolhido[3]}Hz)")
+    return escolhido[1], escolhido[3]
+
+
+DISPOSITIVO, TAXA_AMOSTRAGEM = encontrar_microfone()
 
 
 def gravar_tempo_fixo(duracao: int, taxa: int = TAXA_AMOSTRAGEM) -> np.ndarray:

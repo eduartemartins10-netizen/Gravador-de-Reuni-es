@@ -28,7 +28,7 @@ from datetime import datetime
 # CONFIGURACOES
 # ──────────────────────────────────────────────
 
-MODELO      = "small"   # tiny | base | small | medium | large
+MODELO      = "medium"  # tiny | base | small | medium | large (medium = melhor para reunioes)
 IDIOMA      = "pt"      # "pt" = portugues | "en" = ingles | None = auto
 PASTA_SAIDA = "transcricoes"
 
