@@ -30,15 +30,19 @@ PASTA_SAIDA   = "atas"
 
 PROMPT_ATA = """Voce e um assistente especializado em criar atas profissionais de reunioes.
 
-A seguir esta a TRANSCRICAO automatica de uma reuniao. Pode conter erros de transcricao
-(palavras trocadas, pontuacao incorreta) — interprete pelo contexto.
+A seguir esta a TRANSCRICAO automatica de uma reuniao gerada por reconhecimento de voz.
+Ela pode conter erros tipicos de transcricao: palavras trocadas por sons parecidos,
+nomes proprios escritos errado, pontuacao incorreta, frases cortadas.
+
+ANTES de gerar a ata, corrija mentalmente esses erros interpretando pelo contexto
+(ex: "caixa daqui" provavelmente e "caixa d'aqui" ou outro termo do contexto).
 
 Gere uma ATA DE REUNIAO em portugues brasileiro com a seguinte estrutura:
 
 # ATA DA REUNIAO
 
 ## RESUMO EXECUTIVO
-(2-3 paragrafos resumindo o que foi discutido)
+(2-3 paragrafos resumindo o que foi discutido, com linguagem clara e corrigida)
 
 ## TEMAS ABORDADOS
 (Lista dos principais assuntos tratados)
@@ -56,11 +60,12 @@ Formato: - [Responsavel] Acao (prazo: X)
 ## PROXIMOS PASSOS
 (O que vem a seguir)
 
-REGRAS:
-- Use linguagem profissional e objetiva
-- Se algum item nao foi mencionado, escreva "Nao mencionado"
-- Nao invente informacoes que nao estao na transcricao
+REGRAS OBRIGATORIAS:
+- Use linguagem profissional, formal e objetiva
+- Corrija erros de transcricao pelo contexto, sem inventar informacoes novas
+- Substitua qualquer palavra de baixo calao, ofensa ou linguagem obscena por linguagem neutra e profissional
 - Mantenha nomes proprios como aparecem na transcricao
+- Se algum item nao foi mencionado, escreva "Nao mencionado"
 
 TRANSCRICAO:
 ---

@@ -34,8 +34,8 @@ def encontrar_microfone() -> tuple[int | None, int]:
     Retorna (indice_do_dispositivo, taxa_de_amostragem_nativa).
     """
     ignorar  = ["cable", "vb-audio", "virtual", "mixagem", "stereo mix",
-                "alto-falante", "speaker", "output"]
-    preferir = ["intel", "tecnologia", "realtek", "mic input"]
+                "alto-falante", "speaker", "output", "audiominiport"]
+    preferir = ["intel", "tecnologia", "realtek", "mic input", "cirrus"]
 
     dispositivos = sd.query_devices()
     candidatos = []
@@ -67,6 +67,115 @@ def encontrar_microfone() -> tuple[int | None, int]:
 
 
 DISPOSITIVO, TAXA_AMOSTRAGEM = encontrar_microfone()
+
+
+def encontrar_saida() -> tuple[int | None, int]:
+    """
+    Encontra o dispositivo de saida WASAPI para loopback
+    (captura o audio que esta tocando no computador).
+    """
+    ignorar = ["audiominiport", "mapeador", "driver", "prim"]
+    dispositivos = sd.query_devices()
+    candidatos = []
+    for i, d in enumerate(dispositivos):
+        if d["max_output_channels"] == 0 or d["max_input_channels"] > 0:
+            continue
+        nome = d["name"].lower()
+        if any(p in nome for p in ignorar):
+            continue
+        candidatos.append((int(d["default_samplerate"]), i, d["name"]))
+    if not candidatos:
+        return None, 48000
+    candidatos.sort(reverse=True)
+    taxa, idx, nome = candidatos[0]
+    print(f"  Saida (loopback):   [{idx}] {nome} ({taxa}Hz)")
+    return idx, taxa
+
+
+DISPOSITIVO_SAIDA, TAXA_SAIDA = encontrar_saida()
+
+
+def _misturar(mic: np.ndarray, taxa_mic: int,
+               loopback: np.ndarray, taxa_loop: int) -> np.ndarray:
+    """Reamostras ambos para a maior taxa e mixa mic + loopback."""
+    taxa_alvo = max(taxa_mic, taxa_loop)
+
+    def resample(a: np.ndarray, orig: int) -> np.ndarray:
+        if orig == taxa_alvo or len(a) == 0:
+            return a
+        n = int(len(a) * taxa_alvo / orig)
+        return np.interp(np.linspace(0, len(a), n),
+                         np.arange(len(a)), a).astype(np.float32)
+
+    m = resample(mic.flatten(),      taxa_mic)
+    l = resample(loopback.flatten(), taxa_loop)
+    n = min(len(m), len(l))
+    if n == 0:
+        return m if len(m) > 0 else l
+    return np.clip(m[:n] * 0.6 + l[:n] * 0.4, -1.0, 1.0)
+
+
+def gravar_ate_evento(evento_parar: threading.Event) -> np.ndarray:
+    """
+    Grava microfone + audio do sistema (loopback) simultaneamente
+    ate evento_parar ser setado ou 30 minutos se passarem.
+    Retorna o audio mixado pronto para salvar.
+    """
+    fila_mic  = queue.Queue()
+    fila_loop = queue.Queue()
+
+    def cb_mic(indata, frames, time, status):
+        fila_mic.put(indata.copy())
+
+    def cb_loop(indata, frames, time, status):
+        fila_loop.put(indata.copy())
+
+    stream_mic = sd.InputStream(
+        samplerate=TAXA_AMOSTRAGEM, channels=CANAIS,
+        dtype="float32", device=DISPOSITIVO, callback=cb_mic,
+    )
+
+    stream_loop = None
+    loopback_ativo = False
+    if DISPOSITIVO_SAIDA is not None:
+        try:
+            stream_loop = sd.InputStream(
+                samplerate=TAXA_SAIDA, channels=2,
+                dtype="float32", device=DISPOSITIVO_SAIDA,
+                extra_settings=sd.WasapiSettings(loopback=True),
+                callback=cb_loop,
+            )
+            loopback_ativo = True
+        except Exception as e:
+            print(f"  (loopback indisponivel: {e})")
+
+    with stream_mic:
+        if stream_loop:
+            with stream_loop:
+                evento_parar.wait(timeout=30 * 60)
+        else:
+            evento_parar.wait(timeout=30 * 60)
+
+    pedacos_mic = []
+    while not fila_mic.empty():
+        pedacos_mic.append(fila_mic.get())
+    audio_mic = np.concatenate(pedacos_mic) if pedacos_mic else np.zeros((0,), dtype="float32")
+    if audio_mic.ndim > 1:
+        audio_mic = audio_mic.mean(axis=1)
+
+    if not loopback_ativo:
+        return audio_mic
+
+    pedacos_loop = []
+    while not fila_loop.empty():
+        pedacos_loop.append(fila_loop.get())
+    if not pedacos_loop:
+        return audio_mic
+    audio_loop = np.concatenate(pedacos_loop)
+    if audio_loop.ndim > 1:
+        audio_loop = audio_loop.mean(axis=1)
+
+    return _misturar(audio_mic, TAXA_AMOSTRAGEM, audio_loop, TAXA_SAIDA)
 
 
 def gravar_tempo_fixo(duracao: int, taxa: int = TAXA_AMOSTRAGEM) -> np.ndarray:
