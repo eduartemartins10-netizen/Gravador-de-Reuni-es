@@ -53,29 +53,28 @@ def etapa_gravar(duracao: int | None) -> str:
     banner(1, "GRAVACAO")
 
     if duracao is None:
+        # Modo interativo: streaming para disco (aguenta horas de gravacao)
         print("Pressione ENTER para comecar a gravar...")
         input()
-        audio = gravar_audio.gravar_ate_enter()
+        caminho, pico = gravar_audio.gravar_streaming(gravar_audio.PASTA_SAIDA)
     else:
+        # Modo tempo fixo: mantido para testes curtos
+        import numpy as np
         audio = gravar_audio.gravar_tempo_fixo(duracao)
+        if len(audio) == 0:
+            print("ERRO: nenhum audio foi capturado.")
+            input("\nPressione ENTER para fechar...")
+            sys.exit(1)
+        pico = float(abs(audio).max())
+        caminho = gravar_audio.salvar_audio(audio)
 
-    if len(audio) == 0:
-        print("ERRO: nenhum audio foi capturado.")
-        input("\nPressione ENTER para fechar...")
-        sys.exit(1)
-
-    # Verifica se o microfone realmente captou algo
-    import numpy as np
-    pico = float(abs(audio).max())
     if pico < 0.005:
         print(f"\nAVISO: o microfone captou muito pouco som (volume: {pico:.4f}).")
         print("Dica: fale mais perto do microfone ou verifique se nao esta no mudo.")
 
-    caminho = gravar_audio.salvar_audio(audio)
-    duracao_gravada = len(audio) / gravar_audio.TAXA_AMOSTRAGEM
-    tamanho_kb = os.path.getsize(caminho) / 1024
+    tamanho_mb = os.path.getsize(caminho) / (1024 * 1024)
     print(f"\nAudio salvo: {caminho}")
-    print(f"Duracao: {duracao_gravada:.1f}s | Tamanho: {tamanho_kb:.0f} KB")
+    print(f"Tamanho: {tamanho_mb:.1f} MB")
 
     return caminho
 
@@ -83,9 +82,12 @@ def etapa_gravar(duracao: int | None) -> str:
 def etapa_transcrever(caminho_audio: str) -> tuple[str, str]:
     banner(2, "TRANSCRICAO COM WHISPER")
 
-    audio  = transcrever.carregar_audio(caminho_audio)
     modelo = transcrever.carregar_modelo(transcrever.MODELO)
-    texto  = transcrever.transcrever(modelo, audio, transcrever.IDIOMA)
+
+    # Usa sempre a versao em blocos — funciona para qualquer duracao
+    texto  = transcrever.transcrever_arquivo_longo(
+        caminho_audio, modelo, transcrever.IDIOMA,
+    )
 
     caminho_txt = transcrever.salvar_transcricao(
         texto, caminho_audio, transcrever.PASTA_SAIDA

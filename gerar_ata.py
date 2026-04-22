@@ -112,7 +112,7 @@ def chamar_gemini(api_key: str, modelo: str, prompt: str, max_tentativas: int = 
     # Retry com backoff exponencial: 2s, 4s, 8s...
     for tentativa in range(1, max_tentativas + 1):
         try:
-            with urllib.request.urlopen(requisicao, timeout=60) as resposta:
+            with urllib.request.urlopen(requisicao, timeout=180) as resposta:
                 dados = json.loads(resposta.read().decode("utf-8"))
             break  # Sucesso — sai do loop
 

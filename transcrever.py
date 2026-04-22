@@ -39,14 +39,15 @@ def carregar_audio(caminho: str) -> np.ndarray:
     """
     Le o arquivo WAV com soundfile e converte para
     float32 mono 16kHz — formato exigido pelo Whisper.
+
+    ATENCAO: carrega tudo na memoria — nao use para arquivos de 1h+.
+    Para arquivos longos, use transcrever_arquivo_longo().
     """
     audio, taxa_original = sf.read(caminho, dtype="float32")
 
-    # Converte estereo para mono calculando a media dos canais
     if audio.ndim > 1:
         audio = audio.mean(axis=1)
 
-    # Reamostra para 16000 Hz se necessario
     if taxa_original != 16000:
         n_amostras = int(len(audio) * 16000 / taxa_original)
         audio = np.interp(
@@ -56,6 +57,55 @@ def carregar_audio(caminho: str) -> np.ndarray:
         ).astype(np.float32)
 
     return audio
+
+
+def _bloco_para_whisper(bloco: np.ndarray, taxa_original: int) -> np.ndarray:
+    """Converte um bloco de audio para o formato que o Whisper espera."""
+    if bloco.ndim > 1:
+        bloco = bloco.mean(axis=1)
+    if taxa_original != 16000:
+        n = int(len(bloco) * 16000 / taxa_original)
+        bloco = np.interp(
+            np.linspace(0, len(bloco), n),
+            np.arange(len(bloco)),
+            bloco,
+        ).astype(np.float32)
+    return bloco
+
+
+def transcrever_arquivo_longo(caminho_audio: str, modelo: WhisperModel,
+                              idioma: str, bloco_minutos: int = 10) -> str:
+    """
+    Transcreve um arquivo de audio lendo e processando em blocos,
+    sem carregar tudo na RAM. Funciona para arquivos de qualquer duracao.
+    """
+    info = sf.info(caminho_audio)
+    taxa = info.samplerate
+    total_amostras = info.frames
+    duracao_total = total_amostras / taxa
+
+    bloco_amostras = int(bloco_minutos * 60 * taxa)
+    total_blocos = (total_amostras + bloco_amostras - 1) // bloco_amostras
+
+    print(f"Audio: {duracao_total / 60:.1f} minutos, processando em {total_blocos} bloco(s) de {bloco_minutos} min\n")
+
+    textos = []
+    with sf.SoundFile(caminho_audio, "r") as f:
+        for num in range(1, total_blocos + 1):
+            print(f"  Bloco {num}/{total_blocos}...", flush=True)
+            bloco = f.read(bloco_amostras, dtype="float32")
+            if len(bloco) == 0:
+                break
+
+            audio_whisper = _bloco_para_whisper(bloco, taxa)
+            segmentos, info_t = modelo.transcribe(
+                audio_whisper, language=idioma, beam_size=5,
+            )
+            texto = "".join(seg.text for seg in segmentos).strip()
+            if texto:
+                textos.append(texto)
+
+    return " ".join(textos)
 
 
 def carregar_modelo(nome: str) -> WhisperModel:

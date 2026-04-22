@@ -196,6 +196,9 @@ def gravar_ate_enter(taxa: int = TAXA_AMOSTRAGEM) -> np.ndarray:
     """
     Grava em streaming ate o usuario pressionar Enter.
     Retorna o audio gravado como array numpy.
+
+    ATENCAO: esta funcao acumula na RAM — use gravar_streaming()
+    para gravacoes longas (mais de 30 minutos).
     """
     fila = queue.Queue()
     parar = threading.Event()
@@ -217,7 +220,6 @@ def gravar_ate_enter(taxa: int = TAXA_AMOSTRAGEM) -> np.ndarray:
     inicio = datetime.now()
 
     def atualizar_tempo():
-        """Mostra o tempo decorrido enquanto grava."""
         while not parar.is_set():
             decorrido = (datetime.now() - inicio).total_seconds()
             minutos = int(decorrido // 60)
@@ -230,12 +232,11 @@ def gravar_ate_enter(taxa: int = TAXA_AMOSTRAGEM) -> np.ndarray:
 
     with stream:
         thread_tempo.start()
-        input()  # Bloqueia ate o usuario apertar Enter
+        input()
         parar.set()
 
-    print()  # quebra de linha depois do contador
+    print()
 
-    # Junta todos os pedacos capturados
     while not fila.empty():
         pedacos.append(fila.get())
 
@@ -243,6 +244,65 @@ def gravar_ate_enter(taxa: int = TAXA_AMOSTRAGEM) -> np.ndarray:
         return np.zeros((0, CANAIS), dtype="float32")
 
     return np.concatenate(pedacos)
+
+
+def gravar_streaming(pasta: str = PASTA_SAIDA,
+                     taxa: int = TAXA_AMOSTRAGEM) -> tuple[str, float]:
+    """
+    Grava em streaming escrevendo direto no disco — uso de RAM constante.
+    Funciona para gravacoes de qualquer duracao (minutos ou horas).
+
+    Retorna (caminho_do_arquivo, volume_pico_medido).
+    """
+    os.makedirs(pasta, exist_ok=True)
+    agora   = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    caminho = os.path.join(pasta, f"reuniao_{agora}.wav")
+
+    parar = threading.Event()
+    pico = [0.0]  # lista de 1 elemento para poder ser mutado dentro do callback
+
+    # PCM_16: metade do tamanho de float32, mesma qualidade para voz
+    arquivo = sf.SoundFile(caminho, mode="w", samplerate=taxa,
+                            channels=CANAIS, subtype="PCM_16")
+
+    def callback(indata, frames, time_info, status):
+        arquivo.write(indata)
+        p = float(abs(indata).max())
+        if p > pico[0]:
+            pico[0] = p
+
+    stream = sd.InputStream(
+        samplerate=taxa,
+        channels=CANAIS,
+        dtype="float32",
+        device=DISPOSITIVO,
+        callback=callback,
+    )
+
+    inicio = datetime.now()
+
+    def atualizar_tempo():
+        while not parar.is_set():
+            decorrido = (datetime.now() - inicio).total_seconds()
+            horas    = int(decorrido // 3600)
+            minutos  = int((decorrido % 3600) // 60)
+            segundos = int(decorrido % 60)
+            print(f"\r  Gravando: {horas:02d}:{minutos:02d}:{segundos:02d} — pressione ENTER para parar",
+                  end="", flush=True)
+            parar.wait(timeout=1)
+
+    thread_tempo = threading.Thread(target=atualizar_tempo, daemon=True)
+
+    try:
+        with stream:
+            thread_tempo.start()
+            input()
+            parar.set()
+    finally:
+        arquivo.close()
+
+    print()
+    return caminho, pico[0]
 
 
 def salvar_audio(audio: np.ndarray, taxa: int = TAXA_AMOSTRAGEM,
