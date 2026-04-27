@@ -11,10 +11,22 @@ import tkinter as tk
 RAIZ = os.path.dirname(os.path.abspath(__file__))
 os.chdir(RAIZ)
 
+# Carrega chaves salvas localmente para o os.environ antes dos imports pesados
+import config
+config.aplicar_no_ambiente()
+
+# Se nao tem chave do Gemini, abre o wizard primeiro
+if not config.get_chave("GEMINI_API_KEY"):
+    import wizard
+    if not wizard.abrir_wizard():
+        sys.exit(0)
+    config.aplicar_no_ambiente()
+
 # Importar transcrever primeiro — faz o mock do 'av' antes do faster_whisper
 import transcrever
 import gravar_audio
 import gerar_ata
+import diarizar
 import sounddevice as sd
 
 import ctypes
@@ -144,25 +156,35 @@ class App:
 
     def _pipeline(self):
         try:
-            audio = self._gravar()
+            caminho_audio = self._gravar()
+            if not caminho_audio or not os.path.exists(caminho_audio):
+                self._ui(lambda: (self._status("  Falha ao gravar audio", "#ffaa44"),
+                                   self._reset_idle()))
+                return
 
-            # Se nao capturou nada, usa silencio para que o Whisper processe assim mesmo
-            if audio is None or len(audio) == 0:
-                import numpy as np
-                audio = np.zeros((gravar_audio.TAXA_AMOSTRAGEM * 2,), dtype="float32")
-
-            caminho_audio = gravar_audio.salvar_audio(audio)
+            # Diarizacao opcional (quem falou quando)
+            diarizacao = None
+            if diarizar.disponivel():
+                self._ui(lambda: self._status("  Identificando falantes...", "#ccaaff"))
+                try:
+                    diarizacao = diarizar.diarizar(caminho_audio)
+                    print(f"  Diarizacao: {len(set(s for _,_,s in diarizacao))} falantes identificados")
+                except Exception as e:
+                    print(f"  Diarizacao falhou: {e}")
 
             self._ui(lambda: self._status("  Transcrevendo...", "#88ccff"))
-            audio_arr   = transcrever.carregar_audio(caminho_audio)
             modelo      = transcrever.carregar_modelo(transcrever.MODELO)
-            texto       = transcrever.transcrever(modelo, audio_arr, transcrever.IDIOMA)
+            texto       = transcrever.transcrever_arquivo(
+                modelo, caminho_audio, transcrever.IDIOMA, diarizacao=diarizacao
+            )
             caminho_txt = transcrever.salvar_transcricao(
                 texto, caminho_audio, transcrever.PASTA_SAIDA
             )
 
             self._ui(lambda: self._status("  Gerando ata...", "#88ffcc"))
-            ata         = gerar_ata.gerar_ata(texto if texto.strip() else "(sem transcricao)", gerar_ata.MODELO)
+            ata         = gerar_ata.gerar_ata(
+                texto if texto.strip() else "(sem transcricao)", gerar_ata.MODELO
+            )
             caminho_ata = gerar_ata.salvar_ata(ata, caminho_txt, gerar_ata.PASTA_SAIDA)
 
             self._ui(lambda c=caminho_ata: self._concluido(c))
@@ -171,7 +193,7 @@ class App:
             msg = str(e)[:55]
             self._ui(lambda m=msg: (self._status(f"  {m}", "#ff6b6b"), self._reset_idle()))
 
-    def _gravar(self):
+    def _gravar(self) -> str | None:
         try:
             return gravar_audio.gravar_ate_evento(self._parar)
         except Exception:

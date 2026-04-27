@@ -1,20 +1,14 @@
 """
 ETAPA 2 - Transcricao de audio com faster-whisper.
 
-Lê o WAV com soundfile (sem DLL externa) e passa diretamente
-como numpy array ao modelo — contornando o bloqueio do Windows
-na biblioteca 'av'.
-
-Como usar:
-  python transcrever.py                          <- usa o .wav mais recente
-  python transcrever.py gravacoes/minha_reuniao.wav
+Le o WAV em chunks com soundfile (sem carregar tudo na memoria)
+e transcreve cada chunk separadamente — permite gravacoes longas.
 """
 import sys
 from unittest.mock import MagicMock
 
-# Moca a biblioteca 'av' antes de importar faster_whisper.
-# Isso evita o ImportError causado pela politica de seguranca do Windows.
-# Nao usaremos 'av' de qualquer forma — leremos o audio com soundfile.
+# Moca a biblioteca 'av' antes de importar faster_whisper (contorna
+# o bloqueio do Windows App Control). Nao usamos 'av' — lemos via soundfile.
 sys.modules["av"] = MagicMock()
 
 from faster_whisper import WhisperModel
@@ -29,83 +23,10 @@ from datetime import datetime
 # ──────────────────────────────────────────────
 
 MODELO      = "medium"  # tiny | base | small | medium | large (medium = melhor para reunioes)
-IDIOMA      = "pt"      # "pt" = portugues | "en" = ingles | None = auto
+IDIOMA      = None      # None = auto-detecta por chunk (suporta PT + EN misturados)
 PASTA_SAIDA = "transcricoes"
 
 # ──────────────────────────────────────────────
-
-
-def carregar_audio(caminho: str) -> np.ndarray:
-    """
-    Le o arquivo WAV com soundfile e converte para
-    float32 mono 16kHz — formato exigido pelo Whisper.
-
-    ATENCAO: carrega tudo na memoria — nao use para arquivos de 1h+.
-    Para arquivos longos, use transcrever_arquivo_longo().
-    """
-    audio, taxa_original = sf.read(caminho, dtype="float32")
-
-    if audio.ndim > 1:
-        audio = audio.mean(axis=1)
-
-    if taxa_original != 16000:
-        n_amostras = int(len(audio) * 16000 / taxa_original)
-        audio = np.interp(
-            np.linspace(0, len(audio), n_amostras),
-            np.arange(len(audio)),
-            audio,
-        ).astype(np.float32)
-
-    return audio
-
-
-def _bloco_para_whisper(bloco: np.ndarray, taxa_original: int) -> np.ndarray:
-    """Converte um bloco de audio para o formato que o Whisper espera."""
-    if bloco.ndim > 1:
-        bloco = bloco.mean(axis=1)
-    if taxa_original != 16000:
-        n = int(len(bloco) * 16000 / taxa_original)
-        bloco = np.interp(
-            np.linspace(0, len(bloco), n),
-            np.arange(len(bloco)),
-            bloco,
-        ).astype(np.float32)
-    return bloco
-
-
-def transcrever_arquivo_longo(caminho_audio: str, modelo: WhisperModel,
-                              idioma: str, bloco_minutos: int = 10) -> str:
-    """
-    Transcreve um arquivo de audio lendo e processando em blocos,
-    sem carregar tudo na RAM. Funciona para arquivos de qualquer duracao.
-    """
-    info = sf.info(caminho_audio)
-    taxa = info.samplerate
-    total_amostras = info.frames
-    duracao_total = total_amostras / taxa
-
-    bloco_amostras = int(bloco_minutos * 60 * taxa)
-    total_blocos = (total_amostras + bloco_amostras - 1) // bloco_amostras
-
-    print(f"Audio: {duracao_total / 60:.1f} minutos, processando em {total_blocos} bloco(s) de {bloco_minutos} min\n")
-
-    textos = []
-    with sf.SoundFile(caminho_audio, "r") as f:
-        for num in range(1, total_blocos + 1):
-            print(f"  Bloco {num}/{total_blocos}...", flush=True)
-            bloco = f.read(bloco_amostras, dtype="float32")
-            if len(bloco) == 0:
-                break
-
-            audio_whisper = _bloco_para_whisper(bloco, taxa)
-            segmentos, info_t = modelo.transcribe(
-                audio_whisper, language=idioma, beam_size=5,
-            )
-            texto = "".join(seg.text for seg in segmentos).strip()
-            if texto:
-                textos.append(texto)
-
-    return " ".join(textos)
 
 
 def carregar_modelo(nome: str) -> WhisperModel:
@@ -116,18 +37,79 @@ def carregar_modelo(nome: str) -> WhisperModel:
     return modelo
 
 
-def transcrever(modelo: WhisperModel, audio: np.ndarray, idioma: str) -> str:
-    print("Transcrevendo... Aguarde.\n")
+def transcrever_arquivo(modelo: WhisperModel, caminho_wav: str,
+                         idioma: str, diarizacao=None,
+                         chunk_min: int = 10) -> str:
+    """
+    Transcreve um WAV longo lendo em chunks de 'chunk_min' minutos —
+    permite reunioes de varias horas sem estourar memoria.
 
-    segmentos, info = modelo.transcribe(
-        audio,
-        language=idioma,
-        beam_size=5,
-    )
+    Se 'diarizacao' for fornecida (lista de (inicio, fim, speaker)),
+    cada trecho e rotulado com o falante correspondente.
+    """
+    from diarizar import atribuir_speaker
 
-    print(f"Idioma: {info.language} (confianca: {info.language_probability:.0%})\n")
+    info = sf.info(caminho_wav)
+    frames_por_chunk = int(chunk_min * 60 * info.samplerate)
+    total_min = info.frames / info.samplerate / 60
+    print(f"Transcrevendo em chunks de {chunk_min}min "
+          f"({total_min:.1f}min total)...\n")
 
-    return "".join(seg.text for seg in segmentos).strip()
+    blocos = []
+    speaker_atual = None
+    texto_atual = []
+    lang_atual = None
+
+    def finalizar_bloco():
+        if texto_atual:
+            prefixo = f"[{speaker_atual}] " if speaker_atual else ""
+            lang = f"[{lang_atual}] " if lang_atual else ""
+            blocos.append(f"{prefixo}{lang}" + " ".join(texto_atual))
+
+    with sf.SoundFile(caminho_wav) as f:
+        indice = 0
+        while f.tell() < info.frames:
+            pos_frames = f.tell()
+            offset_s = pos_frames / info.samplerate
+            chunk = f.read(frames_por_chunk, dtype="float32")
+            if chunk.ndim > 1:
+                chunk = chunk.mean(axis=1)
+            if info.samplerate != 16000:
+                n = int(len(chunk) * 16000 / info.samplerate)
+                chunk = np.interp(np.linspace(0, len(chunk), n),
+                                  np.arange(len(chunk)), chunk).astype(np.float32)
+            indice += 1
+            print(f"  Chunk {indice}: transcrevendo...", flush=True)
+            segs, info_chunk = modelo.transcribe(
+                chunk,
+                language=idioma,
+                beam_size=5,
+                vad_filter=False,
+                no_speech_threshold=1.0,
+                condition_on_previous_text=False,
+            )
+            lang = info_chunk.language if idioma is None else idioma
+
+            for seg in segs:
+                texto_seg = seg.text.strip()
+                if not texto_seg:
+                    continue
+                speaker = None
+                if diarizacao:
+                    ts_ini = offset_s + seg.start
+                    ts_fim = offset_s + seg.end
+                    speaker = atribuir_speaker(ts_ini, ts_fim, diarizacao)
+
+                # Agrupa segmentos consecutivos do mesmo falante e idioma
+                if speaker != speaker_atual or lang != lang_atual:
+                    finalizar_bloco()
+                    speaker_atual = speaker
+                    lang_atual = lang
+                    texto_atual = []
+                texto_atual.append(texto_seg)
+
+    finalizar_bloco()
+    return "\n".join(blocos).strip()
 
 
 def salvar_transcricao(texto: str, caminho_audio: str, pasta_saida: str) -> str:
@@ -149,46 +131,3 @@ def salvar_transcricao(texto: str, caminho_audio: str, pasta_saida: str) -> str:
     return caminho
 
 
-def main():
-    if len(sys.argv) > 1:
-        caminho_audio = sys.argv[1]
-    else:
-        pasta = "gravacoes"
-        if not os.path.exists(pasta):
-            print("Pasta 'gravacoes/' nao encontrada. Rode gravar_audio.py primeiro.")
-            sys.exit(1)
-        arquivos = [
-            os.path.join(pasta, f)
-            for f in os.listdir(pasta)
-            if f.endswith(".wav")
-        ]
-        if not arquivos:
-            print("Nenhum arquivo .wav em 'gravacoes/'")
-            sys.exit(1)
-        caminho_audio = max(arquivos, key=os.path.getmtime)
-        print(f"Arquivo mais recente: {caminho_audio}\n")
-
-    if not os.path.exists(caminho_audio):
-        print(f"Arquivo nao encontrado: {caminho_audio}")
-        sys.exit(1)
-
-    print("=" * 60)
-    print("  TRANSCRICAO DE REUNIAO — Etapa 2")
-    print("=" * 60 + "\n")
-
-    audio  = carregar_audio(caminho_audio)
-    modelo = carregar_modelo(MODELO)
-    texto  = transcrever(modelo, audio, IDIOMA)
-
-    print("RESULTADO:")
-    print("-" * 60)
-    print(texto)
-    print("-" * 60)
-
-    saida = salvar_transcricao(texto, caminho_audio, PASTA_SAIDA)
-    print(f"\nSalvo em: {saida}")
-    print("\nPronto!")
-
-
-if __name__ == "__main__":
-    main()

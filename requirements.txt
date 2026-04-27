@@ -1,4 +1,6 @@
 sounddevice
 soundfile
+soundcard
 numpy
 faster-whisper
+pyannote.audio

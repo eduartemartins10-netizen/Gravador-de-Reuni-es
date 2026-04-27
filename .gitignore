@@ -3,6 +3,16 @@ gravacoes/
 transcricoes/
 atas/
 
+# Build do PyInstaller
+build/
+dist/
+GravadorDeReunioes/
+*.zip
+*.spec.bak
+
+# Config local com chaves (nunca commitar)
+config.json
+
 # Credenciais
 .env
 *.key

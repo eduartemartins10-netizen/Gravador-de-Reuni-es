@@ -1,12 +1,8 @@
 """
-ETAPA 1 - Gravacao de audio do microfone.
+ETAPA 1 - Gravacao de audio (microfone + loopback do sistema).
 
-Suporta dois modos:
-  - Duracao fixa: passa o numero de segundos
-  - Ate apertar Enter: duracao indefinida (modo interativo)
-
-Como usar (standalone):
-  python gravar_audio.py
+Exporta 'gravar_ate_evento(evento)' — consumida pelo interface.py.
+Escreve direto em disco (memoria constante — aguenta gravacoes longas).
 """
 import sounddevice as sd
 import soundfile as sf
@@ -16,6 +12,12 @@ import threading
 import os
 from datetime import datetime
 
+try:
+    import soundcard as sc
+    SOUNDCARD_OK = True
+except ImportError:
+    SOUNDCARD_OK = False
+
 
 # ──────────────────────────────────────────────
 # CONFIGURACOES
@@ -23,6 +25,7 @@ from datetime import datetime
 
 CANAIS      = 1       # 1 = mono (ideal para voz e Whisper)
 PASTA_SAIDA = "gravacoes"
+MAX_HORAS   = 10      # duracao maxima de gravacao contínua
 
 # ──────────────────────────────────────────────
 
@@ -95,245 +98,159 @@ def encontrar_saida() -> tuple[int | None, int]:
 DISPOSITIVO_SAIDA, TAXA_SAIDA = encontrar_saida()
 
 
-def _misturar(mic: np.ndarray, taxa_mic: int,
-               loopback: np.ndarray, taxa_loop: int) -> np.ndarray:
-    """Reamostras ambos para a maior taxa e mixa mic + loopback."""
-    taxa_alvo = max(taxa_mic, taxa_loop)
+def _writer_thread(fila: queue.Queue, caminho: str, taxa: int, canais: int,
+                    parar: threading.Event) -> None:
+    """Drena a fila e escreve os chunks direto em WAV (memoria constante)."""
+    with sf.SoundFile(caminho, mode="w", samplerate=taxa,
+                      channels=canais, subtype="FLOAT") as arq:
+        while not parar.is_set() or not fila.empty():
+            try:
+                chunk = fila.get(timeout=0.2)
+                arq.write(chunk)
+            except queue.Empty:
+                continue
+
+
+def _gravar_loopback_sc(caminho: str, taxa: int, parar: threading.Event) -> None:
+    """
+    Captura o audio do sistema (loopback) usando a biblioteca 'soundcard'
+    e escreve direto em WAV. Roda em thread separada.
+    """
+    if not SOUNDCARD_OK:
+        return
+    # COM precisa ser inicializado em toda thread no Windows que usa WASAPI
+    import ctypes
+    try:
+        ctypes.windll.ole32.CoInitialize(None)
+    except Exception:
+        pass
+
+    try:
+        speaker = sc.default_speaker()
+        mic_lb  = sc.get_microphone(id=str(speaker.name), include_loopback=True)
+        chunk_frames = taxa // 10  # blocos de 100ms
+        with mic_lb.recorder(samplerate=taxa, channels=2) as rec, \
+             sf.SoundFile(caminho, mode="w", samplerate=taxa,
+                          channels=2, subtype="FLOAT") as arq:
+            while not parar.is_set():
+                data = rec.record(numframes=chunk_frames)
+                arq.write(data.astype(np.float32))
+    except Exception as e:
+        print(f"  (loopback falhou: {e})")
+    finally:
+        try:
+            ctypes.windll.ole32.CoUninitialize()
+        except Exception:
+            pass
+
+
+def _mixar_arquivos(caminho_mic: str, caminho_loop: str,
+                     caminho_final: str, chunk_s: int = 5) -> None:
+    """
+    Le mic e loopback em chunks de 5s, reamostras para a maior taxa,
+    mixa e grava o resultado — mantem memoria constante.
+    """
+    info_mic  = sf.info(caminho_mic)
+    info_loop = sf.info(caminho_loop)
+    taxa_alvo = max(info_mic.samplerate, info_loop.samplerate)
 
     def resample(a: np.ndarray, orig: int) -> np.ndarray:
         if orig == taxa_alvo or len(a) == 0:
-            return a
+            return a.astype(np.float32)
         n = int(len(a) * taxa_alvo / orig)
         return np.interp(np.linspace(0, len(a), n),
                          np.arange(len(a)), a).astype(np.float32)
 
-    m = resample(mic.flatten(),      taxa_mic)
-    l = resample(loopback.flatten(), taxa_loop)
-    n = min(len(m), len(l))
-    if n == 0:
-        return m if len(m) > 0 else l
-    return np.clip(m[:n] * 0.6 + l[:n] * 0.4, -1.0, 1.0)
+    with sf.SoundFile(caminho_mic)  as mic_f, \
+         sf.SoundFile(caminho_loop) as loop_f, \
+         sf.SoundFile(caminho_final, mode="w", samplerate=taxa_alvo,
+                      channels=1, subtype="FLOAT") as out:
+
+        while True:
+            m = mic_f.read(chunk_s * info_mic.samplerate,  dtype="float32")
+            l = loop_f.read(chunk_s * info_loop.samplerate, dtype="float32")
+            if len(m) == 0 and len(l) == 0:
+                break
+            if m.ndim > 1:
+                m = m.mean(axis=1)
+            if l.ndim > 1:
+                l = l.mean(axis=1)
+            m = resample(m, info_mic.samplerate)
+            l = resample(l, info_loop.samplerate)
+            tam = max(len(m), len(l))
+            if len(m) < tam:
+                m = np.pad(m, (0, tam - len(m)))
+            if len(l) < tam:
+                l = np.pad(l, (0, tam - len(l)))
+            if tam == 0:
+                continue
+            out.write(np.clip(m * 0.6 + l * 0.4, -1.0, 1.0).astype(np.float32))
 
 
-def gravar_ate_evento(evento_parar: threading.Event) -> np.ndarray:
+def gravar_ate_evento(evento_parar: threading.Event) -> str:
     """
-    Grava microfone + audio do sistema (loopback) simultaneamente
-    ate evento_parar ser setado ou 30 minutos se passarem.
-    Retorna o audio mixado pronto para salvar.
+    Grava microfone + audio do sistema (loopback) simultaneamente, escrevendo
+    direto em arquivos WAV (memoria constante — suporta gravacoes longas).
+    Para quando evento_parar for setado ou apos MAX_HORAS horas.
+    Retorna o caminho do WAV final ja mixado.
     """
-    fila_mic  = queue.Queue()
-    fila_loop = queue.Queue()
+    os.makedirs(PASTA_SAIDA, exist_ok=True)
+    agora = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+    caminho_final = os.path.join(PASTA_SAIDA, f"reuniao_{agora}.wav")
+    tmp_mic  = caminho_final + ".mic.tmp.wav"
+    tmp_loop = caminho_final + ".loop.tmp.wav"
+
+    fila_mic = queue.Queue()
 
     def cb_mic(indata, frames, time, status):
         fila_mic.put(indata.copy())
 
-    def cb_loop(indata, frames, time, status):
-        fila_loop.put(indata.copy())
+    parar_writers = threading.Event()
+
+    t_mic = threading.Thread(
+        target=_writer_thread,
+        args=(fila_mic, tmp_mic, TAXA_AMOSTRAGEM, CANAIS, parar_writers),
+        daemon=True,
+    )
+    t_mic.start()
 
     stream_mic = sd.InputStream(
         samplerate=TAXA_AMOSTRAGEM, channels=CANAIS,
         dtype="float32", device=DISPOSITIVO, callback=cb_mic,
     )
 
-    stream_loop = None
+    parar_loopback = threading.Event()
+    t_loop = None
     loopback_ativo = False
-    if DISPOSITIVO_SAIDA is not None:
-        try:
-            stream_loop = sd.InputStream(
-                samplerate=TAXA_SAIDA, channels=2,
-                dtype="float32", device=DISPOSITIVO_SAIDA,
-                extra_settings=sd.WasapiSettings(loopback=True),
-                callback=cb_loop,
-            )
-            loopback_ativo = True
-        except Exception as e:
-            print(f"  (loopback indisponivel: {e})")
+    if SOUNDCARD_OK:
+        t_loop = threading.Thread(
+            target=_gravar_loopback_sc,
+            args=(tmp_loop, TAXA_SAIDA, parar_loopback),
+            daemon=True,
+        )
+        t_loop.start()
+        loopback_ativo = True
 
     with stream_mic:
-        if stream_loop:
-            with stream_loop:
-                evento_parar.wait(timeout=30 * 60)
-        else:
-            evento_parar.wait(timeout=30 * 60)
+        evento_parar.wait(timeout=MAX_HORAS * 3600)
 
-    pedacos_mic = []
-    while not fila_mic.empty():
-        pedacos_mic.append(fila_mic.get())
-    audio_mic = np.concatenate(pedacos_mic) if pedacos_mic else np.zeros((0,), dtype="float32")
-    if audio_mic.ndim > 1:
-        audio_mic = audio_mic.mean(axis=1)
+    parar_writers.set()
+    parar_loopback.set()
+    t_mic.join(timeout=10)
+    if t_loop:
+        t_loop.join(timeout=10)
 
-    if not loopback_ativo:
-        return audio_mic
+    if loopback_ativo and os.path.exists(tmp_loop) and os.path.getsize(tmp_loop) > 100:
+        _mixar_arquivos(tmp_mic, tmp_loop, caminho_final)
+        for tmp in (tmp_mic, tmp_loop):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
+    else:
+        if os.path.exists(tmp_mic):
+            os.replace(tmp_mic, caminho_final)
 
-    pedacos_loop = []
-    while not fila_loop.empty():
-        pedacos_loop.append(fila_loop.get())
-    if not pedacos_loop:
-        return audio_mic
-    audio_loop = np.concatenate(pedacos_loop)
-    if audio_loop.ndim > 1:
-        audio_loop = audio_loop.mean(axis=1)
-
-    return _misturar(audio_mic, TAXA_AMOSTRAGEM, audio_loop, TAXA_SAIDA)
+    return caminho_final
 
 
-def gravar_tempo_fixo(duracao: int, taxa: int = TAXA_AMOSTRAGEM) -> np.ndarray:
-    """Grava por um numero fixo de segundos."""
-    print(f"Gravando por {duracao} segundos...\n")
-    audio = sd.rec(
-        frames=int(duracao * taxa),
-        samplerate=taxa,
-        channels=CANAIS,
-        dtype="float32",
-        device=DISPOSITIVO,
-    )
-    sd.wait()
-    return audio
-
-
-def gravar_ate_enter(taxa: int = TAXA_AMOSTRAGEM) -> np.ndarray:
-    """
-    Grava em streaming ate o usuario pressionar Enter.
-    Retorna o audio gravado como array numpy.
-
-    ATENCAO: esta funcao acumula na RAM — use gravar_streaming()
-    para gravacoes longas (mais de 30 minutos).
-    """
-    fila = queue.Queue()
-    parar = threading.Event()
-
-    def callback(indata, frames, time, status):
-        if status:
-            print(f"  (aviso: {status})")
-        fila.put(indata.copy())
-
-    stream = sd.InputStream(
-        samplerate=taxa,
-        channels=CANAIS,
-        dtype="float32",
-        device=DISPOSITIVO,
-        callback=callback,
-    )
-
-    pedacos = []
-    inicio = datetime.now()
-
-    def atualizar_tempo():
-        while not parar.is_set():
-            decorrido = (datetime.now() - inicio).total_seconds()
-            minutos = int(decorrido // 60)
-            segundos = int(decorrido % 60)
-            print(f"\r  Gravando: {minutos:02d}:{segundos:02d} — pressione ENTER para parar",
-                  end="", flush=True)
-            parar.wait(timeout=1)
-
-    thread_tempo = threading.Thread(target=atualizar_tempo, daemon=True)
-
-    with stream:
-        thread_tempo.start()
-        input()
-        parar.set()
-
-    print()
-
-    while not fila.empty():
-        pedacos.append(fila.get())
-
-    if not pedacos:
-        return np.zeros((0, CANAIS), dtype="float32")
-
-    return np.concatenate(pedacos)
-
-
-def gravar_streaming(pasta: str = PASTA_SAIDA,
-                     taxa: int = TAXA_AMOSTRAGEM) -> tuple[str, float]:
-    """
-    Grava em streaming escrevendo direto no disco — uso de RAM constante.
-    Funciona para gravacoes de qualquer duracao (minutos ou horas).
-
-    Retorna (caminho_do_arquivo, volume_pico_medido).
-    """
-    os.makedirs(pasta, exist_ok=True)
-    agora   = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    caminho = os.path.join(pasta, f"reuniao_{agora}.wav")
-
-    parar = threading.Event()
-    pico = [0.0]  # lista de 1 elemento para poder ser mutado dentro do callback
-
-    # PCM_16: metade do tamanho de float32, mesma qualidade para voz
-    arquivo = sf.SoundFile(caminho, mode="w", samplerate=taxa,
-                            channels=CANAIS, subtype="PCM_16")
-
-    def callback(indata, frames, time_info, status):
-        arquivo.write(indata)
-        p = float(abs(indata).max())
-        if p > pico[0]:
-            pico[0] = p
-
-    stream = sd.InputStream(
-        samplerate=taxa,
-        channels=CANAIS,
-        dtype="float32",
-        device=DISPOSITIVO,
-        callback=callback,
-    )
-
-    inicio = datetime.now()
-
-    def atualizar_tempo():
-        while not parar.is_set():
-            decorrido = (datetime.now() - inicio).total_seconds()
-            horas    = int(decorrido // 3600)
-            minutos  = int((decorrido % 3600) // 60)
-            segundos = int(decorrido % 60)
-            print(f"\r  Gravando: {horas:02d}:{minutos:02d}:{segundos:02d} — pressione ENTER para parar",
-                  end="", flush=True)
-            parar.wait(timeout=1)
-
-    thread_tempo = threading.Thread(target=atualizar_tempo, daemon=True)
-
-    try:
-        with stream:
-            thread_tempo.start()
-            input()
-            parar.set()
-    finally:
-        arquivo.close()
-
-    print()
-    return caminho, pico[0]
-
-
-def salvar_audio(audio: np.ndarray, taxa: int = TAXA_AMOSTRAGEM,
-                 pasta: str = PASTA_SAIDA) -> str:
-    """Salva o array de audio como .wav na pasta indicada. Retorna o caminho."""
-    os.makedirs(pasta, exist_ok=True)
-    agora   = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    caminho = os.path.join(pasta, f"reuniao_{agora}.wav")
-    sf.write(caminho, audio, taxa)
-    return caminho
-
-
-def main():
-    print("=" * 50)
-    print("  GRAVADOR DE AUDIO — microfone")
-    print("=" * 50)
-    print()
-    print("Pressione ENTER para comecar a gravar...")
-    input()
-
-    audio = gravar_ate_enter()
-
-    caminho = salvar_audio(audio)
-    duracao = len(audio) / TAXA_AMOSTRAGEM
-    tamanho_kb = os.path.getsize(caminho) / 1024
-
-    print(f"\nGravacao concluida:")
-    print(f"  Duracao: {duracao:.1f}s")
-    print(f"  Tamanho: {tamanho_kb:.0f} KB")
-    print(f"  Arquivo: {caminho}")
-
-
-if __name__ == "__main__":
-    main()

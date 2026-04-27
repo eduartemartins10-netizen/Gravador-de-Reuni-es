@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gravador de Reunião</title>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <main class="app">
+    <header>
+      <h1>Gravador de Reunião</h1>
+      <p class="tagline">Grava, transcreve e gera a ata automaticamente</p>
+    </header>
+
+    <!-- Setup / chave da API -->
+    <section id="tela-setup" class="tela">
+      <h2>Bem-vindo!</h2>
+      <p>Antes de usar, cole sua chave da API do Google Gemini (é grátis).</p>
+      <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener"
+         class="btn-link">Obter chave grátis →</a>
+      <input id="input-chave" type="password" placeholder="Cole a chave aqui"
+             autocomplete="off" spellcheck="false">
+      <button id="btn-salvar-chave" class="btn btn-primario">Salvar</button>
+      <p id="status-chave" class="status"></p>
+    </section>
+
+    <!-- Gravador -->
+    <section id="tela-gravador" class="tela oculta">
+      <div id="estado" class="estado-card">
+        <div id="status" class="status-texto">Pronto para gravar</div>
+        <div id="timer" class="timer"></div>
+      </div>
+
+      <button id="btn-gravar" class="btn btn-gravar">
+        <span class="icone-rec"></span>
+        <span id="btn-texto">Iniciar Gravação</span>
+      </button>
+
+      <!-- Painel de transcricao ao vivo (aparece enquanto grava) -->
+      <div id="painel-ao-vivo" class="ao-vivo oculto">
+        <div class="ao-vivo-header">
+          <span class="ao-vivo-badge">● AO VIVO</span>
+          <span id="ao-vivo-status">Aguardando primeira fala...</span>
+        </div>
+        <div id="texto-ao-vivo" class="ao-vivo-texto"></div>
+      </div>
+
+      <details class="opcoes">
+        <summary>Opções avançadas</summary>
+        <label>
+          <input type="checkbox" id="capturar-sistema" checked>
+          Capturar áudio do sistema (Meet / Teams / Zoom)
+        </label>
+        <label>
+          <input type="checkbox" id="capturar-mic" checked>
+          Capturar minha voz (microfone)
+        </label>
+        <label>
+          <input type="checkbox" id="transcricao-ao-vivo" checked>
+          Transcrever ao vivo (mostra texto durante a reunião)
+        </label>
+        <button id="btn-trocar-chave" class="btn-link">Trocar chave da API</button>
+      </details>
+    </section>
+
+    <!-- Resultado + streaming ao vivo -->
+    <section id="tela-resultado" class="tela oculta">
+      <div class="cabecalho-resultado">
+        <h2 id="titulo-resultado">
+          <span class="spinner-inline"></span>
+          Gerando ata...
+        </h2>
+        <p id="subtitulo-resultado" class="status">Preparando upload do áudio...</p>
+      </div>
+
+      <div class="previa">
+        <h3 id="titulo-previa">Transcrição e ata (ao vivo)</h3>
+        <pre id="previa-ata"><span class="cursor-digitando"></span></pre>
+      </div>
+
+      <div class="botoes-resultado" id="botoes-resultado">
+        <button id="btn-baixar-ata" class="btn btn-primario" disabled>Baixar ata (.md)</button>
+        <button id="btn-baixar-audio" class="btn btn-secundario">Baixar áudio (.webm)</button>
+        <button id="btn-nova" class="btn btn-terciario">Nova gravação</button>
+      </div>
+    </section>
+
+    <footer>
+      <p>Tudo roda no seu navegador. A chave e o áudio não saem do seu dispositivo até você gerar a ata.</p>
+    </footer>
+  </main>
+
+  <script src="script.js"></script>
+</body>
+</html>
