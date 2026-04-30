@@ -121,6 +121,12 @@ async function iniciarGravacao() {
     throw new Error("Abra uma sala do Google Meet antes de gravar");
   }
 
+  // Le a chave da API aqui no background (offscreen nao acessa storage direto).
+  const { gemini_api_key } = await chrome.storage.sync.get("gemini_api_key");
+  if (!gemini_api_key) {
+    throw new Error("Configure a chave do Gemini antes de gravar");
+  }
+
   // Pede um stream-id ao tabCapture (so funciona quando vem da popup/UI)
   const streamId = await chrome.tabCapture.getMediaStreamId({
     targetTabId: tabAtiva.id,
@@ -129,8 +135,7 @@ async function iniciarGravacao() {
   // Garante que ha uma pagina offscreen rodando
   await criarOffscreenSeNecessario();
 
-  // Aguarda a offscreen estar pronta (a primeira mensagem pode falhar se foi
-  // criada agora). Mecanismo simples: tenta varias vezes.
+  // Envia o comando para a offscreen, ja com a chave embutida.
   let resposta;
   for (let i = 0; i < 5; i++) {
     try {
@@ -138,6 +143,7 @@ async function iniciarGravacao() {
         alvo: "offscreen",
         tipo: "iniciar",
         streamId,
+        apiKey: gemini_api_key,
       });
       if (resposta) break;
     } catch (e) {

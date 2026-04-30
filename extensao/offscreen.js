@@ -55,6 +55,7 @@ let mediaRecorder = null;
 let chunks = [];
 let mediaStream = null;
 let mimeTypeAtual = "audio/webm";
+let apiKeyAtiva = null;  // recebida do background ao iniciar — evita acessar chrome.storage daqui
 
 // === Mensagens do background ===
 chrome.runtime.onMessage.addListener((msg, sender, responder) => {
@@ -62,6 +63,7 @@ chrome.runtime.onMessage.addListener((msg, sender, responder) => {
 
   switch (msg.tipo) {
     case "iniciar":
+      apiKeyAtiva = msg.apiKey || null;
       iniciarGravacao(msg.streamId)
         .then(() => responder({ ok: true }))
         .catch((e) => responder({ ok: false, erro: e.message }));
@@ -162,9 +164,8 @@ function avisarBackground(estado, dados = {}) {
 
 // === Pipeline com Gemini ===
 async function processarComGemini(blob) {
-  const { gemini_api_key } = await chrome.storage.sync.get("gemini_api_key");
-  if (!gemini_api_key) {
-    throw new Error("Chave da API nao configurada");
+  if (!apiKeyAtiva) {
+    throw new Error("Chave da API nao recebida do background");
   }
 
   let partAudio;
@@ -175,7 +176,7 @@ async function processarComGemini(blob) {
     };
   } else {
     avisarBackground("subindo");
-    const fileUri = await uploadArquivo(gemini_api_key, blob);
+    const fileUri = await uploadArquivo(apiKeyAtiva, blob);
     partAudio = {
       file_data: { mime_type: blob.type || "audio/webm", file_uri: fileUri },
     };
@@ -188,7 +189,7 @@ async function processarComGemini(blob) {
   for (const modelo of MODELOS_FALLBACK) {
     for (let tentativa = 1; tentativa <= 4; tentativa++) {
       try {
-        return await chamarGemini(gemini_api_key, modelo, parts);
+        return await chamarGemini(apiKeyAtiva, modelo, parts);
       } catch (e) {
         ultimoErro = e;
         const transiente = [429, 500, 502, 503, 504].includes(e.status);
