@@ -1,17 +1,17 @@
 /**
- * popup.js — logica da popup da extensao.
- * Detecta se a aba ativa esta em meet.google.com e mostra o estado.
+ * popup.js — popup da extensao.
+ * Mostra status, dispara gravacao via background.
  */
 
 const el = (id) => document.getElementById(id);
 
-// === Estado ===
 const ESTADOS = {
-  CARREGANDO:    { titulo: "Verificando...",        detalhe: "Aguarde",                            classe: ""        },
-  SEM_MEET:      { titulo: "Sem reuniao ativa",     detalhe: "Abra uma reuniao do Google Meet",   classe: ""        },
-  PRONTO:        { titulo: "Pronto para gravar",    detalhe: "Reuniao do Meet detectada",         classe: "ativo"   },
-  GRAVANDO:      { titulo: "Gravando",              detalhe: "Reuniao em curso",                    classe: "gravando"},
-  SEM_CHAVE:     { titulo: "Configure a API",       detalhe: "Adicione a chave do Gemini",         classe: ""        },
+  CARREGANDO:   { titulo: "Verificando...",       detalhe: "Aguarde",                          classe: ""        },
+  SEM_MEET:     { titulo: "Sem reuniao ativa",    detalhe: "Abra uma sala do Google Meet",     classe: ""        },
+  PRONTO:       { titulo: "Pronto para gravar",   detalhe: "Reuniao do Meet detectada",        classe: "ativo"   },
+  GRAVANDO:     { titulo: "Gravando",             detalhe: "Reuniao em curso",                 classe: "gravando"},
+  PROCESSANDO:  { titulo: "Processando",          detalhe: "Gerando ata com IA...",            classe: "ativo"   },
+  SEM_CHAVE:    { titulo: "Configure a API",      detalhe: "Adicione a chave do Gemini",       classe: ""        },
 };
 
 function aplicarEstado(estado) {
@@ -20,7 +20,6 @@ function aplicarEstado(estado) {
   el("indicador").className = "indicador " + estado.classe;
 }
 
-// === Detecta se a aba ativa esta em meet ===
 async function abaAtual() {
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
   return tab;
@@ -30,8 +29,6 @@ function ehMeet(tab) {
   return tab && tab.url && tab.url.startsWith("https://meet.google.com/");
 }
 
-// === Chave da API ===
-// Usa storage.sync — sincroniza com sua conta Google entre PCs.
 async function chaveSalva() {
   const { gemini_api_key } = await chrome.storage.sync.get("gemini_api_key");
   return gemini_api_key || "";
@@ -45,32 +42,24 @@ async function removerChave() {
   await chrome.storage.sync.remove("gemini_api_key");
 }
 
-// === Estado de gravacao ===
-// Mantido em storage.local — gravacao e por PC, nao sincroniza
-// (senao um PC pensa que ta gravando quando e outro).
-async function estaGravando() {
+async function estadoAtualGravacao() {
   const { gravando } = await chrome.storage.local.get("gravando");
-  return Boolean(gravando);
+  return gravando;
 }
 
-// === Migracao: storage.local → storage.sync (uma vez) ===
-// Se voce ja salvou a chave antes em storage.local, copia para sync.
 async function migrarChaveSeNecessario() {
   const localData = await chrome.storage.local.get("gemini_api_key");
   if (localData.gemini_api_key) {
     const syncData = await chrome.storage.sync.get("gemini_api_key");
     if (!syncData.gemini_api_key) {
       await chrome.storage.sync.set({ gemini_api_key: localData.gemini_api_key });
-      console.log("[Gravador DM] Chave migrada de local para sync");
     }
     await chrome.storage.local.remove("gemini_api_key");
   }
 }
 
-// === Inicializacao ===
 async function atualizarEstado() {
   await migrarChaveSeNecessario();
-  aplicarEstado(ESTADOS.CARREGANDO);
 
   const chave = await chaveSalva();
   if (!chave) {
@@ -80,7 +69,8 @@ async function atualizarEstado() {
     return;
   }
 
-  if (await estaGravando()) {
+  const gravando = await estadoAtualGravacao();
+  if (gravando) {
     aplicarEstado(ESTADOS.GRAVANDO);
     el("btn-gravar").disabled = false;
     el("btn-gravar").textContent = "Parar Gravacao";
@@ -99,7 +89,7 @@ async function atualizarEstado() {
   }
 }
 
-// === Eventos ===
+// === Eventos de UI ===
 el("btn-config").addEventListener("click", async () => {
   const painel = el("painel-config");
   painel.classList.toggle("painel-oculto");
@@ -117,7 +107,6 @@ el("btn-salvar-chave").addEventListener("click", async () => {
   const chave = el("input-chave").value.trim();
   if (!chave) {
     await removerChave();
-    el("input-chave").value = "";
     el("painel-config").classList.add("painel-oculto");
     atualizarEstado();
     return;
@@ -136,11 +125,38 @@ el("input-chave").addEventListener("keydown", (e) => {
 });
 
 el("btn-gravar").addEventListener("click", async () => {
-  // Placeholder — a logica real de gravacao virara aqui na proxima etapa
-  const gravando = await estaGravando();
-  await chrome.storage.local.set({ gravando: !gravando });
-  atualizarEstado();
+  el("btn-gravar").disabled = true;
+  const gravando = await estadoAtualGravacao();
+
+  try {
+    const resp = await chrome.runtime.sendMessage({
+      alvo: "background",
+      tipo: gravando ? "parar-gravacao" : "iniciar-gravacao",
+    });
+    if (!resp || !resp.ok) {
+      throw new Error(resp?.erro || "Falha desconhecida");
+    }
+
+    if (!gravando) {
+      // Acabou de iniciar
+      aplicarEstado(ESTADOS.GRAVANDO);
+      el("btn-gravar").textContent = "Parar Gravacao";
+    } else {
+      // Acabou de parar
+      aplicarEstado(ESTADOS.PROCESSANDO);
+      el("btn-gravar").textContent = "Aguarde...";
+    }
+  } catch (e) {
+    alert("Erro: " + e.message);
+    atualizarEstado();
+  } finally {
+    el("btn-gravar").disabled = false;
+  }
 });
 
-// Boot
+// Atualiza o estado se algo mudar enquanto a popup esta aberta
+chrome.storage.onChanged.addListener((changes) => {
+  if (changes.gravando) atualizarEstado();
+});
+
 atualizarEstado();

@@ -1,68 +1,177 @@
 /**
  * background.js — service worker da extensao.
  *
- * Responsabilidades nessa versao MVP:
- *  - Detectar quando o usuario entra/sai de uma sala do Google Meet
- *  - Atualizar o icone da extensao para sinalizar visualmente
- *
- * As acoes de gravacao serao adicionadas na proxima etapa.
+ * Responsabilidades:
+ *  - Detectar entrada/saida de salas do Meet (badge no icone)
+ *  - Orquestrar a gravacao: pedir tabCapture, criar offscreen, sinalizar
+ *  - Manter o estado de gravacao em chrome.storage.local
  */
 
-// URLs de uma sala do Meet seguem o padrao: meet.google.com/abc-defg-hij
+const CAMINHO_OFFSCREEN = "offscreen.html";
+
 function ehUrlSalaDoMeet(url) {
   if (!url) return false;
-  // /abc-defg-hij → e uma sala. /home, /lookup, /landing, etc → nao
   return /^https:\/\/meet\.google\.com\/[a-z]{3}-[a-z]{4}-[a-z]{3}/.test(url);
 }
 
-// Atualiza o badge do icone para indicar status
-function atualizarBadge(tabId, status) {
+function setBadge(tabId, status) {
   if (status === "sala") {
     chrome.action.setBadgeBackgroundColor({ color: "#10b981", tabId });
     chrome.action.setBadgeText({ text: "•", tabId });
   } else if (status === "gravando") {
     chrome.action.setBadgeBackgroundColor({ color: "#ef4444", tabId });
     chrome.action.setBadgeText({ text: "REC", tabId });
+  } else if (status === "processando") {
+    chrome.action.setBadgeBackgroundColor({ color: "#f59e0b", tabId });
+    chrome.action.setBadgeText({ text: "..." , tabId });
   } else {
     chrome.action.setBadgeText({ text: "", tabId });
   }
 }
 
-// Quando uma aba muda de URL ou e atualizada, reavalia se e Meet
+// === Deteccao de Meet ===
 chrome.tabs.onUpdated.addListener((tabId, changeInfo, tab) => {
   if (changeInfo.status !== "complete" && !changeInfo.url) return;
-
-  if (ehUrlSalaDoMeet(tab.url)) {
-    atualizarBadge(tabId, "sala");
-  } else {
-    atualizarBadge(tabId, null);
-  }
+  setBadge(tabId, ehUrlSalaDoMeet(tab.url) ? "sala" : null);
 });
 
-// Quando o usuario muda de aba ativa
 chrome.tabs.onActivated.addListener(async ({ tabId }) => {
   try {
     const tab = await chrome.tabs.get(tabId);
-    if (ehUrlSalaDoMeet(tab.url)) {
-      atualizarBadge(tabId, "sala");
-    }
-  } catch (e) { /* aba pode ter sido fechada */ }
+    if (ehUrlSalaDoMeet(tab.url)) setBadge(tabId, "sala");
+  } catch (e) {}
 });
 
-// Quando a extensao e instalada
-chrome.runtime.onInstalled.addListener(() => {
-  console.log("Gravador de Reuniao DM instalado");
-});
+// === Offscreen helpers ===
+async function temOffscreen() {
+  // Em MV3, ha apenas uma offscreen page por extensao
+  const contexts = await chrome.runtime.getContexts({
+    contextTypes: ["OFFSCREEN_DOCUMENT"],
+  });
+  return contexts.length > 0;
+}
 
-// Mensagens do content script (vamos usar isso na proxima etapa para receber
-// eventos do Meet — quando a sala comeca, quem esta falando, etc)
+async function criarOffscreenSeNecessario() {
+  if (await temOffscreen()) return;
+  await chrome.offscreen.createDocument({
+    url: CAMINHO_OFFSCREEN,
+    reasons: ["USER_MEDIA"],
+    justification: "Gravacao de audio da aba do Meet em background",
+  });
+}
+
+async function fecharOffscreenSeAberto() {
+  if (await temOffscreen()) {
+    try { await chrome.offscreen.closeDocument(); } catch (e) {}
+  }
+}
+
+// === Comandos vindos da popup ===
 chrome.runtime.onMessage.addListener((msg, sender, responder) => {
-  if (msg.tipo === "meet-evento") {
-    console.log("Evento do Meet:", msg);
-    // Processamento futuro (auto-iniciar gravacao etc)
+  if (msg.alvo !== "background") return false;
+
+  switch (msg.tipo) {
+    case "iniciar-gravacao":
+      iniciarGravacao()
+        .then(() => responder({ ok: true }))
+        .catch((e) => responder({ ok: false, erro: e.message }));
+      return true;  // resposta sera assincrona
+
+    case "parar-gravacao":
+      pararGravacao()
+        .then(() => responder({ ok: true }))
+        .catch((e) => responder({ ok: false, erro: e.message }));
+      return true;
+
+    case "estado-gravacao":
+      // Vem da offscreen via outro caminho — ignoramos aqui (tratado abaixo)
+      return false;
   }
-  if (msg.tipo === "ping") {
-    responder({ pong: true, versao: chrome.runtime.getManifest().version });
+});
+
+// === Mensagens vindas da offscreen ===
+chrome.runtime.onMessage.addListener(async (msg) => {
+  if (msg.alvo !== "background" || msg.tipo !== "estado-gravacao") return;
+
+  const { gravando } = await chrome.storage.local.get("gravando");
+  const tabId = gravando?.tabId;
+
+  if (msg.estado === "gravando" && tabId) {
+    setBadge(tabId, "gravando");
+  } else if (msg.estado === "processando" || msg.estado === "subindo") {
+    if (tabId) setBadge(tabId, "processando");
+  } else if (msg.estado === "concluido" || msg.estado === "erro") {
+    if (tabId) setBadge(tabId, "sala");
+    await chrome.storage.local.set({ gravando: null });
+    if (msg.estado === "erro") {
+      // Mostra notificacao ao usuario
+      chrome.action.setTitle({
+        title: `Erro: ${msg.mensagem}`,
+        tabId,
+      });
+    }
   }
-  return true;
+});
+
+// === Acoes ===
+async function iniciarGravacao() {
+  // Procura uma aba do Meet ativa
+  const [tabAtiva] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!tabAtiva || !ehUrlSalaDoMeet(tabAtiva.url)) {
+    throw new Error("Abra uma sala do Google Meet antes de gravar");
+  }
+
+  // Pede um stream-id ao tabCapture (so funciona quando vem da popup/UI)
+  const streamId = await chrome.tabCapture.getMediaStreamId({
+    targetTabId: tabAtiva.id,
+  });
+
+  // Garante que ha uma pagina offscreen rodando
+  await criarOffscreenSeNecessario();
+
+  // Aguarda a offscreen estar pronta (a primeira mensagem pode falhar se foi
+  // criada agora). Mecanismo simples: tenta varias vezes.
+  let resposta;
+  for (let i = 0; i < 5; i++) {
+    try {
+      resposta = await chrome.runtime.sendMessage({
+        alvo: "offscreen",
+        tipo: "iniciar",
+        streamId,
+      });
+      if (resposta) break;
+    } catch (e) {
+      await new Promise(r => setTimeout(r, 200));
+    }
+  }
+  if (!resposta || !resposta.ok) {
+    await fecharOffscreenSeAberto();
+    throw new Error(resposta?.erro || "Falha ao iniciar a gravacao");
+  }
+
+  await chrome.storage.local.set({
+    gravando: { tabId: tabAtiva.id, inicio: Date.now() },
+  });
+}
+
+async function pararGravacao() {
+  if (!(await temOffscreen())) {
+    await chrome.storage.local.set({ gravando: null });
+    throw new Error("Nenhuma gravacao em andamento");
+  }
+
+  const resposta = await chrome.runtime.sendMessage({
+    alvo: "offscreen",
+    tipo: "parar",
+  });
+  if (!resposta || !resposta.ok) {
+    throw new Error(resposta?.erro || "Falha ao parar a gravacao");
+  }
+  // O offscreen processa o audio e o background recebe "concluido" para limpar.
+}
+
+chrome.runtime.onInstalled.addListener(() => {
+  console.log("Gravador de Reuniao DM instalado/atualizado");
+  // Limpa qualquer estado pendente de uma instalacao anterior
+  chrome.storage.local.set({ gravando: null });
 });
