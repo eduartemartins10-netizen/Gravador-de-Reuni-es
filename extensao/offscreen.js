@@ -339,30 +339,41 @@ function blobParaBase64(blob) {
 }
 
 // === Download ===
+// chrome.downloads nao e acessivel em offscreen — pedimos ao background.
 function timestampNome() {
   const agora = new Date();
   const pad = (n) => String(n).padStart(2, "0");
   return `${agora.getFullYear()}-${pad(agora.getMonth()+1)}-${pad(agora.getDate())}_${pad(agora.getHours())}-${pad(agora.getMinutes())}-${pad(agora.getSeconds())}`;
 }
 
+async function pedirDownloadAoBackground(blob, nome) {
+  // Cria a URL do blob na offscreen e passa para o background.
+  // O blob URL fica acessivel enquanto a offscreen estiver viva.
+  const url = URL.createObjectURL(blob);
+  try {
+    const resp = await chrome.runtime.sendMessage({
+      alvo: "background",
+      tipo: "baixar",
+      url,
+      nome,
+    });
+    if (!resp || !resp.ok) {
+      throw new Error(resp?.erro || "Background nao confirmou o download");
+    }
+  } finally {
+    // Aguarda 5s antes de revogar para o Chrome ter tempo de capturar o conteudo
+    setTimeout(() => URL.revokeObjectURL(url), 5000);
+  }
+}
+
 async function baixarAta(textoAta) {
   const blob = new Blob([textoAta], { type: "text/markdown;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  await chrome.downloads.download({
-    url,
-    filename: `ata_${timestampNome()}.md`,
-    saveAs: false,
-  });
+  await pedirDownloadAoBackground(blob, `ata_${timestampNome()}.md`);
 }
 
 async function baixarAudio(blobAudio) {
-  const url = URL.createObjectURL(blobAudio);
   const ext = blobAudio.type.includes("ogg") ? "ogg" : "webm";
-  await chrome.downloads.download({
-    url,
-    filename: `reuniao_${timestampNome()}.${ext}`,
-    saveAs: false,
-  });
+  await pedirDownloadAoBackground(blobAudio, `reuniao_${timestampNome()}.${ext}`);
 }
 
 console.log("[Gravador DM] Offscreen pronto");

@@ -90,6 +90,21 @@ chrome.runtime.onMessage.addListener((msg, sender, responder) => {
       tratarEstadoGravacao(msg).catch((e) => console.error("[bg] erro estado:", e));
       return false;
 
+    case "baixar":
+      // Vem da offscreen — chrome.downloads nao funciona la, fazemos aqui
+      chrome.downloads.download({
+        url: msg.url,
+        filename: msg.nome,
+        saveAs: false,
+      }).then((id) => {
+        console.log("[bg] download iniciado, id:", id, "nome:", msg.nome);
+        responder({ ok: true, id });
+      }).catch((e) => {
+        console.error("[bg] erro no download:", e);
+        responder({ ok: false, erro: e.message || String(e) });
+      });
+      return true;
+
     default:
       console.warn("[bg] tipo nao reconhecido:", msg.tipo);
       responder({ ok: false, erro: "Tipo de mensagem nao reconhecido: " + msg.tipo });
