@@ -88,22 +88,44 @@ async function iniciarGravacao(streamId) {
   if (mediaRecorder && mediaRecorder.state === "recording") {
     throw new Error("Gravacao ja em andamento");
   }
+  if (!streamId) {
+    throw new Error("streamId nao recebido");
+  }
+
+  console.log("[offscreen] Iniciando captura com streamId:", streamId);
 
   // Captura o audio da aba do Meet usando o streamId que veio do background.
-  mediaStream = await navigator.mediaDevices.getUserMedia({
-    audio: {
-      mandatory: {
-        chromeMediaSource: "tab",
-        chromeMediaSourceId: streamId,
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        mandatory: {
+          chromeMediaSource: "tab",
+          chromeMediaSourceId: streamId,
+        },
       },
-    },
-  });
+    });
+  } catch (e) {
+    throw new Error(`getUserMedia falhou: ${e.message}`);
+  }
+
+  const trilhas = mediaStream.getAudioTracks();
+  console.log("[offscreen] Trilhas de audio capturadas:", trilhas.length, trilhas.map(t => t.label));
+  if (trilhas.length === 0) {
+    throw new Error("Nenhuma trilha de audio na captura — a aba do Meet nao tem som?");
+  }
 
   // CRITICO: a captura corta o som da aba para o usuario.
-  // Reprouvimos o audio na propria pagina offscreen para o som continuar saindo.
-  const ctx = new AudioContext();
-  const fonte = ctx.createMediaStreamSource(mediaStream);
-  fonte.connect(ctx.destination);
+  // Tocamos o stream em um <audio> da propria pagina offscreen para o som
+  // continuar saindo. Isso so funciona com o reason AUDIO_PLAYBACK no manifest.
+  const playback = document.getElementById("playback");
+  playback.srcObject = mediaStream;
+  try {
+    await playback.play();
+    console.log("[offscreen] Playback iniciado (voce deve continuar ouvindo o Meet)");
+  } catch (e) {
+    console.warn("[offscreen] Nao consegui retornar audio para o usuario:", e.message);
+    // Nao bloqueia a gravacao — soh significa que o usuario nao ouvira o Meet enquanto grava
+  }
 
   // Decide o melhor formato suportado
   const tiposSuportados = [
@@ -112,23 +134,37 @@ async function iniciarGravacao(streamId) {
     "audio/ogg;codecs=opus",
   ];
   mimeTypeAtual = tiposSuportados.find(t => MediaRecorder.isTypeSupported(t)) || "audio/webm";
+  console.log("[offscreen] MIME type:", mimeTypeAtual);
 
   chunks = [];
   mediaRecorder = new MediaRecorder(mediaStream, { mimeType: mimeTypeAtual });
   mediaRecorder.ondataavailable = (e) => {
-    if (e.data.size > 0) chunks.push(e.data);
+    if (e.data.size > 0) {
+      chunks.push(e.data);
+      // Loga so a cada 10 chunks pra nao poluir
+      if (chunks.length % 10 === 0) {
+        console.log(`[offscreen] ${chunks.length} chunks capturados`);
+      }
+    }
+  };
+  mediaRecorder.onerror = (e) => {
+    console.error("[offscreen] MediaRecorder erro:", e);
   };
   mediaRecorder.onstop = async () => {
     const blob = new Blob(chunks, { type: mimeTypeAtual });
+    console.log(`[offscreen] Gravacao parada. Total: ${chunks.length} chunks, ${(blob.size/1024/1024).toFixed(1)} MB`);
     chunks = [];
     avisarBackground("processando", { tamanho: blob.size });
 
     try {
+      if (blob.size < 1000) {
+        throw new Error("Audio capturado vazio (< 1 KB) — nada para transcrever");
+      }
       const ata = await processarComGemini(blob);
       await baixarAta(ata);
       avisarBackground("concluido", { ata });
     } catch (e) {
-      console.error("Falha no processamento:", e);
+      console.error("[offscreen] Falha no processamento:", e);
       avisarBackground("erro", { mensagem: e.message });
     }
 
@@ -137,6 +173,7 @@ async function iniciarGravacao(streamId) {
   };
 
   mediaRecorder.start(1000);  // chunks a cada 1s
+  console.log("[offscreen] MediaRecorder iniciado");
   avisarBackground("gravando");
 }
 

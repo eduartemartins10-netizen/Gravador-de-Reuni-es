@@ -55,8 +55,10 @@ async function criarOffscreenSeNecessario() {
   if (await temOffscreen()) return;
   await chrome.offscreen.createDocument({
     url: CAMINHO_OFFSCREEN,
-    reasons: ["USER_MEDIA"],
-    justification: "Gravacao de audio da aba do Meet em background",
+    // USER_MEDIA: captura via getUserMedia
+    // AUDIO_PLAYBACK: toca o audio de volta para o usuario continuar ouvindo o Meet
+    reasons: ["USER_MEDIA", "AUDIO_PLAYBACK"],
+    justification: "Gravacao do audio da aba do Meet em background",
   });
 }
 

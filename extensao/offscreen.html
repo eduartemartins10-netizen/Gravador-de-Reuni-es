@@ -5,7 +5,9 @@
   <title>Gravador (offscreen)</title>
 </head>
 <body>
-  <!-- Pagina invisivel — soh existe para hospedar a gravacao em background -->
+  <!-- Pagina invisivel — soh existe para hospedar a gravacao em background.
+       O elemento audio toca o stream capturado para voce continuar ouvindo a reuniao. -->
+  <audio id="playback" autoplay></audio>
   <script src="offscreen.js"></script>
 </body>
 </html>
