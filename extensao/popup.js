@@ -61,6 +61,19 @@ async function migrarChaveSeNecessario() {
 async function atualizarEstado() {
   await migrarChaveSeNecessario();
 
+  // Mostra erro recente, se houver
+  const { ultimo_erro } = await chrome.storage.local.get("ultimo_erro");
+  if (ultimo_erro && Date.now() - ultimo_erro.quando < 5 * 60 * 1000) {
+    aplicarEstado({
+      titulo: "Erro na ultima gravacao",
+      detalhe: ultimo_erro.mensagem.slice(0, 80),
+      classe: "",
+    });
+    if (ultimo_erro.audioSalvo) {
+      el("status-detalhe").textContent += " — audio bruto salvo em Downloads.";
+    }
+  }
+
   const chave = await chaveSalva();
   if (!chave) {
     aplicarEstado(ESTADOS.SEM_CHAVE);
@@ -79,11 +92,15 @@ async function atualizarEstado() {
 
   const tab = await abaAtual();
   if (ehMeet(tab)) {
-    aplicarEstado(ESTADOS.PRONTO);
+    if (!ultimo_erro || Date.now() - ultimo_erro.quando >= 5 * 60 * 1000) {
+      aplicarEstado(ESTADOS.PRONTO);
+    }
     el("btn-gravar").disabled = false;
     el("btn-gravar").textContent = "Iniciar Gravacao";
   } else {
-    aplicarEstado(ESTADOS.SEM_MEET);
+    if (!ultimo_erro || Date.now() - ultimo_erro.quando >= 5 * 60 * 1000) {
+      aplicarEstado(ESTADOS.SEM_MEET);
+    }
     el("btn-gravar").disabled = true;
     el("btn-gravar").textContent = "Iniciar Gravacao";
   }

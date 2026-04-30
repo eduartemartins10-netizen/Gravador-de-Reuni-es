@@ -106,11 +106,19 @@ chrome.runtime.onMessage.addListener(async (msg) => {
     if (tabId) setBadge(tabId, "sala");
     await chrome.storage.local.set({ gravando: null });
     if (msg.estado === "erro") {
-      // Mostra notificacao ao usuario
+      await chrome.storage.local.set({
+        ultimo_erro: {
+          mensagem: msg.mensagem,
+          audioSalvo: msg.audioSalvo,
+          quando: Date.now(),
+        },
+      });
       chrome.action.setTitle({
         title: `Erro: ${msg.mensagem}`,
         tabId,
       });
+    } else {
+      await chrome.storage.local.remove("ultimo_erro");
     }
   }
 });

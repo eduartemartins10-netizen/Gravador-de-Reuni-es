@@ -156,20 +156,38 @@ async function iniciarGravacao(streamId) {
     chunks = [];
     avisarBackground("processando", { tamanho: blob.size });
 
+    // 1. SEMPRE salva o audio bruto antes de qualquer coisa — backup.
+    let audioSalvoOk = false;
+    try {
+      await baixarAudio(blob);
+      audioSalvoOk = true;
+      console.log("[offscreen] Audio bruto salvo em Downloads como backup");
+    } catch (e) {
+      console.error("[offscreen] Falha ao salvar audio bruto:", e);
+    }
+
+    // 2. Tenta gerar a ata com o Gemini.
     try {
       if (blob.size < 1000) {
         throw new Error("Audio capturado vazio (< 1 KB) — nada para transcrever");
       }
       const ata = await processarComGemini(blob);
       await baixarAta(ata);
+      console.log("[offscreen] Ata baixada com sucesso");
       avisarBackground("concluido", { ata });
-    } catch (e) {
-      console.error("[offscreen] Falha no processamento:", e);
-      avisarBackground("erro", { mensagem: e.message });
-    }
 
-    // Encerra a pagina offscreen — a extensao recria quando precisar de novo
-    setTimeout(() => window.close(), 1000);
+      // So fecha o offscreen quando deu tudo certo.
+      setTimeout(() => window.close(), 1000);
+    } catch (e) {
+      console.error("[offscreen] Falha no processamento Gemini:", e);
+      console.log("[offscreen] Audio bruto disponivel na pasta Downloads:", audioSalvoOk ? "sim" : "NAO");
+      console.log("[offscreen] Esta pagina vai ficar aberta para voce ver os logs.");
+      avisarBackground("erro", {
+        mensagem: e.message,
+        audioSalvo: audioSalvoOk,
+      });
+      // NAO fecha — deixa o usuario ver o erro no console
+    }
   };
 
   mediaRecorder.start(1000);  // chunks a cada 1s
@@ -321,17 +339,28 @@ function blobParaBase64(blob) {
 }
 
 // === Download ===
+function timestampNome() {
+  const agora = new Date();
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${agora.getFullYear()}-${pad(agora.getMonth()+1)}-${pad(agora.getDate())}_${pad(agora.getHours())}-${pad(agora.getMinutes())}-${pad(agora.getSeconds())}`;
+}
+
 async function baixarAta(textoAta) {
   const blob = new Blob([textoAta], { type: "text/markdown;charset=utf-8" });
   const url = URL.createObjectURL(blob);
-
-  const agora = new Date();
-  const pad = (n) => String(n).padStart(2, "0");
-  const nome = `ata_${agora.getFullYear()}-${pad(agora.getMonth()+1)}-${pad(agora.getDate())}_${pad(agora.getHours())}-${pad(agora.getMinutes())}.md`;
-
   await chrome.downloads.download({
     url,
-    filename: nome,
+    filename: `ata_${timestampNome()}.md`,
+    saveAs: false,
+  });
+}
+
+async function baixarAudio(blobAudio) {
+  const url = URL.createObjectURL(blobAudio);
+  const ext = blobAudio.type.includes("ogg") ? "ogg" : "webm";
+  await chrome.downloads.download({
+    url,
+    filename: `reuniao_${timestampNome()}.${ext}`,
     saveAs: false,
   });
 }
