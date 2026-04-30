@@ -147,27 +147,35 @@ el("input-chave").addEventListener("keydown", (e) => {
 el("btn-gravar").addEventListener("click", async () => {
   el("btn-gravar").disabled = true;
   const gravando = await estadoAtualGravacao();
+  const tipo = gravando ? "parar-gravacao" : "iniciar-gravacao";
+
+  console.log("[popup] enviando:", tipo);
 
   try {
     const resp = await chrome.runtime.sendMessage({
       alvo: "background",
-      tipo: gravando ? "parar-gravacao" : "iniciar-gravacao",
+      tipo,
     });
-    if (!resp || !resp.ok) {
-      throw new Error(resp?.erro || "Falha desconhecida");
+
+    console.log("[popup] resposta:", resp);
+
+    if (!resp) {
+      throw new Error("Background nao respondeu (servico pode ter dormido — tente de novo)");
+    }
+    if (!resp.ok) {
+      throw new Error(resp.erro || "Background respondeu sem mensagem de erro");
     }
 
     if (!gravando) {
-      // Acabou de iniciar
       aplicarEstado(ESTADOS.GRAVANDO);
       el("btn-gravar").textContent = "Parar Gravacao";
     } else {
-      // Acabou de parar
       aplicarEstado(ESTADOS.PROCESSANDO);
       el("btn-gravar").textContent = "Aguarde...";
     }
   } catch (e) {
-    alert("Erro: " + e.message);
+    console.error("[popup] erro:", e);
+    alert("Erro: " + (e.message || e));
     atualizarEstado();
   } finally {
     el("btn-gravar").disabled = false;
