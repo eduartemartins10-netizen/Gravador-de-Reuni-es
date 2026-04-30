@@ -5,6 +5,9 @@
 
 const el = (id) => document.getElementById(id);
 
+// Mostra a versao real do manifest no cabecalho
+el("versao").textContent = "v" + chrome.runtime.getManifest().version;
+
 const ESTADOS = {
   CARREGANDO:   { titulo: "Verificando...",       detalhe: "Aguarde",                          classe: ""        },
   SEM_MEET:     { titulo: "Sem reuniao ativa",    detalhe: "Abra uma sala do Google Meet",     classe: ""        },
