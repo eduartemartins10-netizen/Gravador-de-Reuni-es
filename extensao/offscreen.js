@@ -53,9 +53,12 @@ REGRAS:
 // === Estado ===
 let mediaRecorder = null;
 let chunks = [];
-let mediaStream = null;
+let streamTab = null;       // audio da aba do Meet (vozes dos outros)
+let streamMic = null;       // microfone (sua voz)
+let streamMixado = null;    // tab + mic combinados
+let audioCtx = null;
 let mimeTypeAtual = "audio/webm";
-let apiKeyAtiva = null;  // recebida do background ao iniciar — evita acessar chrome.storage daqui
+let apiKeyAtiva = null;
 
 // === Mensagens do background ===
 chrome.runtime.onMessage.addListener((msg, sender, responder) => {
@@ -94,9 +97,9 @@ async function iniciarGravacao(streamId) {
 
   console.log("[offscreen] Iniciando captura com streamId:", streamId);
 
-  // Captura o audio da aba do Meet usando o streamId que veio do background.
+  // 1. Captura o audio da aba do Meet (vozes dos outros)
   try {
-    mediaStream = await navigator.mediaDevices.getUserMedia({
+    streamTab = await navigator.mediaDevices.getUserMedia({
       audio: {
         mandatory: {
           chromeMediaSource: "tab",
@@ -105,29 +108,62 @@ async function iniciarGravacao(streamId) {
       },
     });
   } catch (e) {
-    throw new Error(`getUserMedia falhou: ${e.message}`);
+    throw new Error(`Captura da aba falhou: ${e.message}`);
   }
 
-  const trilhas = mediaStream.getAudioTracks();
-  console.log("[offscreen] Trilhas de audio capturadas:", trilhas.length, trilhas.map(t => t.label));
-  if (trilhas.length === 0) {
-    throw new Error("Nenhuma trilha de audio na captura — a aba do Meet nao tem som?");
+  const trilhasTab = streamTab.getAudioTracks();
+  console.log("[offscreen] Tab audio:", trilhasTab.length, "trilha(s)");
+  if (trilhasTab.length === 0) {
+    throw new Error("Nenhuma trilha de audio na aba — Meet sem som?");
   }
 
-  // CRITICO: a captura corta o som da aba para o usuario.
-  // Tocamos o stream em um <audio> da propria pagina offscreen para o som
-  // continuar saindo. Isso so funciona com o reason AUDIO_PLAYBACK no manifest.
+  // 2. Captura o microfone (sua voz). Se nao conseguir, segue so com a tab.
+  try {
+    streamMic = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+      },
+    });
+    const trilhasMic = streamMic.getAudioTracks();
+    console.log("[offscreen] Microfone:", trilhasMic.length, "trilha(s)", trilhasMic.map(t => t.label));
+  } catch (e) {
+    console.warn("[offscreen] Microfone indisponivel:", e.message);
+    console.warn("[offscreen] Continuando apenas com a tab. Sua voz NAO sera gravada.");
+    streamMic = null;
+  }
+
+  // 3. Toca o audio da TAB de volta para o usuario (so a tab — voce nao se
+  //    escuta de volta para evitar feedback). Isso so funciona com o reason
+  //    AUDIO_PLAYBACK no manifest.
   const playback = document.getElementById("playback");
-  playback.srcObject = mediaStream;
+  playback.srcObject = streamTab;
   try {
     await playback.play();
-    console.log("[offscreen] Playback iniciado (voce deve continuar ouvindo o Meet)");
+    console.log("[offscreen] Playback iniciado (voce continua ouvindo o Meet)");
   } catch (e) {
-    console.warn("[offscreen] Nao consegui retornar audio para o usuario:", e.message);
-    // Nao bloqueia a gravacao — soh significa que o usuario nao ouvira o Meet enquanto grava
+    console.warn("[offscreen] Falha no playback:", e.message);
   }
 
-  // Decide o melhor formato suportado
+  // 4. Mixa tab + microfone via Web Audio API.
+  audioCtx = new AudioContext();
+  const destino = audioCtx.createMediaStreamDestination();
+
+  const fonteTab = audioCtx.createMediaStreamSource(streamTab);
+  fonteTab.connect(destino);
+
+  if (streamMic) {
+    const fonteMic = audioCtx.createMediaStreamSource(streamMic);
+    fonteMic.connect(destino);
+    console.log("[offscreen] Mixagem: tab + microfone");
+  } else {
+    console.log("[offscreen] Mixagem: tab apenas (sem microfone)");
+  }
+
+  streamMixado = destino.stream;
+
+  // 5. Configura o MediaRecorder com o stream mixado
   const tiposSuportados = [
     "audio/webm;codecs=opus",
     "audio/webm",
@@ -137,7 +173,7 @@ async function iniciarGravacao(streamId) {
   console.log("[offscreen] MIME type:", mimeTypeAtual);
 
   chunks = [];
-  mediaRecorder = new MediaRecorder(mediaStream, { mimeType: mimeTypeAtual });
+  mediaRecorder = new MediaRecorder(streamMixado, { mimeType: mimeTypeAtual });
   mediaRecorder.ondataavailable = (e) => {
     if (e.data.size > 0) {
       chunks.push(e.data);
@@ -201,11 +237,20 @@ async function pararGravacao() {
   }
   mediaRecorder.stop();
 
-  // Para o stream para liberar o tab
-  if (mediaStream) {
-    mediaStream.getTracks().forEach(t => t.stop());
-    mediaStream = null;
+  // Para todos os streams para liberar a aba e o microfone
+  if (streamTab) {
+    streamTab.getTracks().forEach(t => t.stop());
+    streamTab = null;
   }
+  if (streamMic) {
+    streamMic.getTracks().forEach(t => t.stop());
+    streamMic = null;
+  }
+  if (audioCtx) {
+    try { await audioCtx.close(); } catch (e) {}
+    audioCtx = null;
+  }
+  streamMixado = null;
 }
 
 function avisarBackground(estado, dados = {}) {
