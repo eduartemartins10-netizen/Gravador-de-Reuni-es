@@ -16,6 +16,8 @@ config.json
 # Credenciais
 .env
 *.key
+*.pem
+*.crx
 
 # Python
 __pycache__/

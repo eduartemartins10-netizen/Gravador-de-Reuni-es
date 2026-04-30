@@ -1,0 +1,36 @@
+{
+  "manifest_version": 3,
+  "name": "Gravador de Reuniao DM",
+  "version": "0.1.0",
+  "description": "Grava reunioes do Google Meet, transcreve e gera ata automaticamente.",
+
+  "permissions": [
+    "tabCapture",
+    "activeTab",
+    "storage",
+    "scripting",
+    "tabs"
+  ],
+
+  "host_permissions": [
+    "https://meet.google.com/*",
+    "https://generativelanguage.googleapis.com/*"
+  ],
+
+  "background": {
+    "service_worker": "background.js"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["https://meet.google.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Gravador de Reuniao"
+  }
+}

@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <title>Gravador de Reuniao</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <header>
+    <h1>Gravador de Reuniao</h1>
+    <span id="versao" class="versao">v0.1.0</span>
+  </header>
+
+  <main>
+    <!-- Status atual -->
+    <section class="status-card" id="status-card">
+      <div class="indicador" id="indicador"></div>
+      <div class="status-info">
+        <strong id="status-titulo">Verificando...</strong>
+        <span id="status-detalhe">Aguarde</span>
+      </div>
+    </section>
+
+    <!-- Acoes -->
+    <section class="acoes">
+      <button id="btn-gravar" class="btn-primario" disabled>
+        Iniciar Gravacao
+      </button>
+      <button id="btn-config" class="btn-secundario">
+        Configuracoes
+      </button>
+    </section>
+
+    <!-- Tela de configuracao da chave -->
+    <section id="painel-config" class="painel-oculto">
+      <h2>Chave da API Gemini</h2>
+      <p class="ajuda">
+        Obtenha uma chave gratuita em
+        <a href="https://aistudio.google.com/apikey" target="_blank">aistudio.google.com/apikey</a>
+      </p>
+      <input id="input-chave" type="password" placeholder="AIza..." autocomplete="off">
+      <button id="btn-salvar-chave" class="btn-primario">Salvar</button>
+      <button id="btn-cancelar-config" class="btn-secundario">Cancelar</button>
+    </section>
+  </main>
+
+  <footer>
+    <span id="rodape-msg">DM Contabil</span>
+  </footer>
+
+  <script src="popup.js"></script>
+</body>
+</html>

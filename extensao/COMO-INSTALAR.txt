@@ -1,0 +1,61 @@
+==========================================================
+GRAVADOR DE REUNIAO DM — Extensao Chrome (versao 0.1.0)
+==========================================================
+
+ESTA E A VERSAO BASICA (MVP).
+O que faz hoje:
+  - Detecta quando voce entra em uma sala do Meet
+  - Mostra o status na popup
+  - Salva a chave da API Gemini
+
+O que ainda NAO faz (proxima etapa):
+  - Gravar audio
+  - Transcrever
+  - Identificar quem esta falando
+  - Gerar ata
+
+----------------------------------------------------------
+COMO INSTALAR NO CHROME
+----------------------------------------------------------
+
+1. Abra o Chrome
+
+2. Cole na barra de endereco:
+   chrome://extensions
+
+3. No canto superior direito, ATIVE o "Modo desenvolvedor"
+
+4. Clique em "Carregar sem compactacao"
+
+5. Selecione esta pasta:
+   c:\Users\dmope\Gravador de reuniao\extensao
+
+6. A extensao vai aparecer na lista. Voce pode fixa-la na
+   barra do Chrome clicando no icone de quebra-cabeca e
+   depois no pino ao lado de "Gravador de Reuniao DM".
+
+----------------------------------------------------------
+COMO TESTAR
+----------------------------------------------------------
+
+1. Configure a chave da API:
+   - Clique no icone da extensao
+   - Clique em "Configuracoes"
+   - Cole a chave do Gemini (a mesma de antes)
+   - Clique "Salvar"
+
+2. Verifique a deteccao do Meet:
+   - Abra meet.google.com em outra aba
+   - Inicie ou entre em uma reuniao
+   - O badge da extensao vira um ponto verde (•)
+   - Clicando no icone, vai mostrar "Pronto para gravar"
+
+----------------------------------------------------------
+PROXIMOS PASSOS
+----------------------------------------------------------
+
+Quando voce confirmar que essa parte funciona, vamos adicionar:
+  - Captura de audio via tabCapture
+  - Speaker detection observando o DOM do Meet
+  - Pipeline pro Gemini com diarizacao
+  - Geracao automatica da ata
