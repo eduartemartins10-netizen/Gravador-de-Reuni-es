@@ -105,6 +105,20 @@ chrome.runtime.onMessage.addListener((msg, sender, responder) => {
       });
       return true;
 
+    case "abrir-resultado":
+      // Vem da offscreen — abre a pagina resultado.html em uma nova aba
+      chrome.tabs.create({
+        url: chrome.runtime.getURL("resultado.html"),
+        active: true,
+      }).then((tab) => {
+        console.log("[bg] resultado aberto na aba:", tab.id);
+        responder({ ok: true, tabId: tab.id });
+      }).catch((e) => {
+        console.error("[bg] erro ao abrir resultado:", e);
+        responder({ ok: false, erro: e.message || String(e) });
+      });
+      return true;
+
     default:
       console.warn("[bg] tipo nao reconhecido:", msg.tipo);
       responder({ ok: false, erro: "Tipo de mensagem nao reconhecido: " + msg.tipo });

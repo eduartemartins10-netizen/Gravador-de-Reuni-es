@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ata da Reuniao</title>
+  <link rel="stylesheet" href="resultado.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <div class="header-info">
+        <h1>Ata da Reuniao</h1>
+        <span id="data-geracao" class="meta"></span>
+      </div>
+      <div class="acoes">
+        <button id="btn-copiar" class="btn btn-secundario">Copiar texto</button>
+        <button id="btn-baixar" class="btn btn-primario">Baixar .md</button>
+      </div>
+    </header>
+
+    <main>
+      <article id="conteudo" class="ata">
+        <p class="vazio">Nenhuma ata disponivel ainda.</p>
+      </article>
+    </main>
+
+    <footer>
+      <span class="versao" id="rodape-versao"></span>
+      <span class="texto-rodape">Gravador de Reuniao DM Contabil</span>
+    </footer>
+  </div>
+
+  <div id="toast" class="toast oculto"></div>
+
+  <script src="resultado.js"></script>
+</body>
+</html>

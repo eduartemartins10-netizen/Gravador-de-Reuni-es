@@ -208,8 +208,10 @@ async function iniciarGravacao(streamId) {
         throw new Error("Audio capturado vazio (< 1 KB) — nada para transcrever");
       }
       const ata = await processarComGemini(blob);
-      await baixarAta(ata);
-      console.log("[offscreen] Ata baixada com sucesso");
+
+      // Salva a ata e pede ao background pra abrir a pagina de resultado.
+      await pedirAberturaResultado(ata);
+      console.log("[offscreen] Ata salva — pagina de resultado aberta no navegador");
       avisarBackground("concluido", { ata });
 
       // So fecha o offscreen quando deu tudo certo.
@@ -414,6 +416,21 @@ async function pedirDownloadAoBackground(blob, nome) {
 async function baixarAta(textoAta) {
   const blob = new Blob([textoAta], { type: "text/markdown;charset=utf-8" });
   await pedirDownloadAoBackground(blob, `ata_${timestampNome()}.md`);
+}
+
+async function pedirAberturaResultado(textoAta) {
+  // Salva a ata no storage para a pagina resultado.html ler.
+  await chrome.storage.local.set({
+    ultima_ata: {
+      texto: textoAta,
+      quando: Date.now(),
+    },
+  });
+  // Pede ao background pra abrir a aba.
+  await chrome.runtime.sendMessage({
+    alvo: "background",
+    tipo: "abrir-resultado",
+  });
 }
 
 async function baixarAudio(blobAudio) {
