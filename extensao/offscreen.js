@@ -419,18 +419,16 @@ async function baixarAta(textoAta) {
 }
 
 async function pedirAberturaResultado(textoAta) {
-  // Salva a ata no storage para a pagina resultado.html ler.
-  await chrome.storage.local.set({
-    ultima_ata: {
-      texto: textoAta,
-      quando: Date.now(),
-    },
-  });
-  // Pede ao background pra abrir a aba.
-  await chrome.runtime.sendMessage({
+  // chrome.storage nao funciona em offscreen — pedimos ao background
+  // pra salvar e abrir a aba em uma operacao so.
+  const resp = await chrome.runtime.sendMessage({
     alvo: "background",
     tipo: "abrir-resultado",
+    ata: textoAta,
   });
+  if (!resp || !resp.ok) {
+    throw new Error(resp?.erro || "Background nao confirmou a abertura do resultado");
+  }
 }
 
 async function baixarAudio(blobAudio) {

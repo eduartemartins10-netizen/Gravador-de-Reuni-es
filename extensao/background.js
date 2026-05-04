@@ -106,17 +106,28 @@ chrome.runtime.onMessage.addListener((msg, sender, responder) => {
       return true;
 
     case "abrir-resultado":
-      // Vem da offscreen — abre a pagina resultado.html em uma nova aba
-      chrome.tabs.create({
-        url: chrome.runtime.getURL("resultado.html"),
-        active: true,
-      }).then((tab) => {
+      // Salva a ata no storage e abre a pagina resultado.html em uma nova aba
+      (async () => {
+        if (msg.ata) {
+          await chrome.storage.local.set({
+            ultima_ata: {
+              texto: msg.ata,
+              quando: Date.now(),
+            },
+          });
+        }
+        const tab = await chrome.tabs.create({
+          url: chrome.runtime.getURL("resultado.html"),
+          active: true,
+        });
         console.log("[bg] resultado aberto na aba:", tab.id);
-        responder({ ok: true, tabId: tab.id });
-      }).catch((e) => {
-        console.error("[bg] erro ao abrir resultado:", e);
-        responder({ ok: false, erro: e.message || String(e) });
-      });
+        return { ok: true, tabId: tab.id };
+      })()
+        .then(responder)
+        .catch((e) => {
+          console.error("[bg] erro ao abrir resultado:", e);
+          responder({ ok: false, erro: e.message || String(e) });
+        });
       return true;
 
     default:
