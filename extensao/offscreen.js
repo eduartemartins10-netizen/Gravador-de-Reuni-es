@@ -162,34 +162,39 @@ async function iniciarGravacao(streamId) {
     streamMic = null;
   }
 
-  // 3. Toca o audio da TAB de volta para o usuario (so a tab — voce nao se
-  //    escuta de volta para evitar feedback). Isso so funciona com o reason
-  //    AUDIO_PLAYBACK no manifest.
-  const playback = document.getElementById("playback");
-  playback.srcObject = streamTab;
-  try {
-    await playback.play();
-    console.log("[offscreen] Playback iniciado (voce continua ouvindo o Meet)");
-  } catch (e) {
-    console.warn("[offscreen] Falha no playback:", e.message);
-  }
-
-  // 4. Mixa tab + microfone via Web Audio API.
+  // 3. Cria o AudioContext e GARANTE que ele esta rodando.
+  //    Em offscreen, ele as vezes nasce suspenso e nunca liga sozinho.
   audioCtx = new AudioContext();
-  const destino = audioCtx.createMediaStreamDestination();
+  if (audioCtx.state === "suspended") {
+    try {
+      await audioCtx.resume();
+      console.log("[offscreen] AudioContext resumido. Estado:", audioCtx.state);
+    } catch (e) {
+      console.warn("[offscreen] Falha ao resumir AudioContext:", e.message);
+    }
+  }
+  console.log("[offscreen] AudioContext estado:", audioCtx.state, "sampleRate:", audioCtx.sampleRate);
+
+  // 4. Cria as fontes e conecta:
+  //    - tab + mic → destino (que vira o stream de gravacao)
+  //    - tab → ctx.destination (que toca pra voce ouvir o Meet)
+  const destinoGravacao = audioCtx.createMediaStreamDestination();
 
   const fonteTab = audioCtx.createMediaStreamSource(streamTab);
-  fonteTab.connect(destino);
+  fonteTab.connect(destinoGravacao);
+  fonteTab.connect(audioCtx.destination); // playback pelo proprio AudioContext
 
   if (streamMic) {
     const fonteMic = audioCtx.createMediaStreamSource(streamMic);
-    fonteMic.connect(destino);
+    fonteMic.connect(destinoGravacao);
+    // microfone NAO vai para audioCtx.destination — evita feedback
     console.log("[offscreen] Mixagem: tab + microfone");
   } else {
     console.log("[offscreen] Mixagem: tab apenas (sem microfone)");
   }
 
-  streamMixado = destino.stream;
+  streamMixado = destinoGravacao.stream;
+  console.log("[offscreen] Stream mixado tracks:", streamMixado.getAudioTracks().length);
 
   // 5. Configura o MediaRecorder com o stream mixado
   const tiposSuportados = [
