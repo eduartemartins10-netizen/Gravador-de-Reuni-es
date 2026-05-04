@@ -13,41 +13,69 @@ const MODELO_GEMINI = "gemini-2.5-flash";
 const MODELOS_FALLBACK = ["gemini-2.5-flash", "gemini-2.0-flash", "gemini-2.5-flash-lite"];
 const LIMITE_INLINE = 18 * 1024 * 1024;
 
-const PROMPT_ATA = `Voce e um assistente especializado em atas profissionais de reunioes.
-Abaixo esta a gravacao em audio de uma reuniao corporativa em portugues brasileiro.
+const PROMPT_ATA = `Voce transcreve audio em portugues brasileiro e gera atas de reunioes.
 
-Gere a resposta no formato exato abaixo, em duas partes:
+REGRA CRITICA - SEM ALUCINACAO:
+Antes de qualquer coisa, avalie o audio. Se ele estiver:
+- silencioso ou inaudivel
+- contendo apenas ruido, musica, ou estatica sem fala humana clara
+- com fala muito baixa, distorcida ou cortada
+
+ENTAO responda APENAS com:
+
+# AUDIO SEM CONTEUDO
+
+O audio fornecido nao contem fala humana clara o suficiente para transcricao.
+Verifique se a captura esta funcionando antes de tentar novamente.
+
+NAO invente conteudo. NAO gere uma ata fictica. NAO use exemplos ou
+templates genericos para preencher.
+
+Se o audio TIVER fala clara em portugues, responda no formato abaixo.
+Transcreva EXATAMENTE o que foi falado, sem adicionar, inferir ou inventar:
 
 # TRANSCRICAO
-(Transcricao corrigida pelo contexto, com pontuacao adequada.
-Identifique falantes diferentes como "Participante A:", "Participante B:" etc.,
-ou pelo nome real se alguem se apresentar.
-Preserve termos tecnicos em ingles - deploy, deadline, sprint, bug, etc.)
+
+(Transcricao fiel ao audio. Identifique falantes diferentes como
+"Participante A:", "Participante B:", ou pelo nome real se alguem se
+apresentar no audio. Para trechos inaudiveis, escreva [inaudivel].
+Preserve nomes proprios e termos tecnicos como foram falados.)
 
 ---
 
 # ATA DA REUNIAO
 
 ## RESUMO EXECUTIVO
-(2-3 paragrafos)
+
+(Baseado APENAS no que foi efetivamente falado no audio.)
 
 ## TEMAS ABORDADOS
-(Lista)
+
+(Apenas o que foi de fato discutido.)
 
 ## DECISOES TOMADAS
-(Lista. Se nenhuma, "Nenhuma decisao formal registrada")
+
+(Apenas decisoes explicitas no audio. Se nenhuma, "Nenhuma decisao formal
+registrada".)
 
 ## ACOES E RESPONSAVEIS
-(- [Responsavel] Acao (prazo: X))
+
+(Apenas acoes mencionadas no audio. Formato:
+- [Responsavel] Acao (prazo: X)
+Se nenhuma, "Nao mencionado".)
 
 ## PONTOS DE ATENCAO
 
+(Apenas pontos explicitos no audio. Se nenhum, "Nao mencionado".)
+
 ## PROXIMOS PASSOS
 
+(Apenas o que foi efetivamente mencionado. Se nada, "Nao mencionado".)
+
 REGRAS:
-- Linguagem profissional e objetiva
-- Substitua palavras de baixo calao por linguagem neutra
-- Se o audio for silencioso ou incompleto, diga "Audio sem conteudo suficiente para ata"
+- Cada secao deve refletir SO o que foi falado no audio. Nada inventado.
+- Linguagem profissional em portugues brasileiro.
+- Substitua palavras de baixo calao por linguagem neutra.
 `;
 
 // === Estado ===
